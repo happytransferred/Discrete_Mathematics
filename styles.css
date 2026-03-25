@@ -1,0 +1,270 @@
+﻿:root {
+  --bg-1: #f6f0e6;
+  --bg-2: #fef8f0;
+  --ink: #1f1d1a;
+  --muted: #6f645a;
+  --accent: #d96f4f;
+  --accent-2: #2b7a6f;
+  --card: #fff8ef;
+  --shadow: 0 18px 40px rgba(31, 29, 26, 0.18);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-family: "IBM Plex Sans", system-ui, sans-serif;
+  color: var(--ink);
+  background: radial-gradient(circle at top left, #f1dfcb, #fdf4e7 40%, #f7efe3 70%) fixed;
+  min-height: 100vh;
+}
+
+.bg-grid {
+  position: fixed;
+  inset: 0;
+  background-image:
+    linear-gradient(transparent 94%, rgba(0,0,0,0.06) 95%),
+    linear-gradient(90deg, transparent 94%, rgba(0,0,0,0.05) 95%);
+  background-size: 48px 48px;
+  opacity: 0.4;
+  pointer-events: none;
+}
+
+.page {
+  position: relative;
+  padding: 48px clamp(20px, 4vw, 56px) 64px;
+  display: flex;
+  flex-direction: column;
+  gap: 36px;
+}
+
+.hero {
+  display: flex;
+  justify-content: space-between;
+  gap: 24px;
+  align-items: center;
+}
+
+.eyebrow {
+  text-transform: uppercase;
+  letter-spacing: 0.2em;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+h1 {
+  margin: 8px 0 12px;
+  font-family: "Fraunces", serif;
+  font-size: clamp(32px, 5vw, 56px);
+}
+
+.subtitle {
+  max-width: 520px;
+  font-size: 16px;
+  color: var(--muted);
+}
+
+.score {
+  display: flex;
+  gap: 16px;
+}
+
+.score-item {
+  background: var(--card);
+  border-radius: 18px;
+  padding: 14px 18px;
+  box-shadow: var(--shadow);
+  min-width: 110px;
+  text-align: center;
+}
+
+.score-item span {
+  display: block;
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.score-item strong {
+  font-size: 24px;
+  font-weight: 700;
+}
+
+.board {
+  display: grid;
+  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
+  gap: 28px;
+}
+
+.canvas-card {
+  position: relative;
+  background: var(--card);
+  border-radius: 28px;
+  padding: 18px;
+  box-shadow: var(--shadow);
+}
+
+canvas {
+  width: 100%;
+  height: auto;
+  border-radius: 20px;
+  background: #fffdf8;
+  display: block;
+}
+
+.canvas-overlay {
+  position: absolute;
+  top: 18px;
+  right: 18px;
+  display: flex;
+  gap: 12px;
+}
+
+.hint {
+  background: rgba(255, 255, 255, 0.8);
+  backdrop-filter: blur(8px);
+  border-radius: 14px;
+  padding: 8px 12px;
+  font-size: 12px;
+  text-align: center;
+  min-width: 90px;
+}
+
+.hint strong {
+  display: block;
+  font-size: 16px;
+  margin-top: 4px;
+}
+
+.panel {
+  background: var(--card);
+  border-radius: 26px;
+  padding: 22px;
+  box-shadow: var(--shadow);
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.panel-section label {
+  display: block;
+  font-weight: 600;
+  margin-bottom: 10px;
+}
+
+input[type="text"] {
+  width: 100%;
+  padding: 12px 14px;
+  border-radius: 14px;
+  border: 1px solid rgba(31, 29, 26, 0.15);
+  font-size: 15px;
+  font-family: inherit;
+  margin-bottom: 12px;
+  background: #fffdf8;
+}
+
+.btn-row {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.btn {
+  border: none;
+  border-radius: 14px;
+  padding: 10px 16px;
+  font-weight: 600;
+  background: #f2e7d9;
+  color: var(--ink);
+  cursor: pointer;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.btn:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 10px 18px rgba(31, 29, 26, 0.16);
+}
+
+.btn.primary {
+  background: var(--ink);
+  color: #fff;
+}
+
+.btn.accent {
+  background: var(--accent);
+  color: #fff;
+}
+
+.btn.ghost {
+  background: transparent;
+  border: 1px dashed rgba(31, 29, 26, 0.2);
+}
+
+.status {
+  background: #fffdf8;
+  padding: 12px;
+  border-radius: 14px;
+  font-size: 14px;
+  color: var(--muted);
+  min-height: 48px;
+}
+
+.history h2 {
+  font-family: "Fraunces", serif;
+  font-size: 22px;
+  margin-bottom: 12px;
+}
+
+.history-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 16px;
+}
+
+.history-card {
+  background: #fffdf8;
+  border-radius: 18px;
+  padding: 12px 14px;
+  border: 1px solid rgba(31, 29, 26, 0.08);
+  font-size: 13px;
+  color: var(--muted);
+}
+
+.history-card strong {
+  display: block;
+  font-size: 15px;
+  color: var(--ink);
+  margin-bottom: 6px;
+}
+
+@media (max-width: 960px) {
+  .hero {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  .score {
+    width: 100%;
+  }
+  .board {
+    grid-template-columns: 1fr;
+  }
+}
+
+@keyframes fadeInUp {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.page > * {
+  animation: fadeInUp 0.6s ease both;
+}
+
+.page > *:nth-child(2) { animation-delay: 0.1s; }
+.page > *:nth-child(3) { animation-delay: 0.2s; }

@@ -1,0 +1,81 @@
+﻿<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>AI作画我猜</title>
+  <link rel="stylesheet" href="styles.css" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:wght@400;600;700&family=IBM+Plex+Sans:wght@400;500;700&display=swap" rel="stylesheet" />
+</head>
+<body>
+  <div class="bg-grid"></div>
+  <main class="page">
+    <header class="hero">
+      <div>
+        <p class="eyebrow">AI作画・猜词</p>
+        <h1>AI画图我猜</h1>
+        <p class="subtitle">点击“作画”，AI会画出一幅抽象画。你来猜题目。</p>
+      </div>
+      <div class="score">
+        <div class="score-item">
+          <span>局数</span>
+          <strong id="round">1</strong>
+        </div>
+        <div class="score-item">
+          <span>总分</span>
+          <strong id="score">0</strong>
+        </div>
+      </div>
+    </header>
+
+    <section class="board">
+      <div class="canvas-card">
+        <canvas id="art" width="680" height="420"></canvas>
+        <div class="canvas-overlay">
+          <div class="hint">
+            <span>关键词长度</span>
+            <strong id="answerLen">?</strong>
+          </div>
+          <div class="hint">
+            <span>难度</span>
+            <strong id="difficulty">—</strong>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-section">
+          <label for="guess">你的猜测</label>
+          <input id="guess" type="text" placeholder="输入你的答案" autocomplete="off" />
+          <div class="btn-row">
+            <button id="guessBtn" class="btn primary">提交猜测</button>
+            <button id="revealBtn" class="btn ghost">揭晓答案</button>
+          </div>
+        </div>
+
+        <div class="panel-section">
+          <label>作画控制</label>
+          <div class="btn-row">
+            <button id="drawBtn" class="btn accent">AI作画</button>
+            <button id="nextBtn" class="btn">下一题</button>
+          </div>
+        </div>
+
+        <div class="panel-section">
+          <label>状态</label>
+          <div id="status" class="status">准备开始。先点“AI作画”。</div>
+        </div>
+      </div>
+    </section>
+
+    <section class="history">
+      <h2>最近回合</h2>
+      <div id="historyList" class="history-list"></div>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>

@@ -1,0 +1,67 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+model User {
+  id           String        @id @default(cuid())
+  email        String        @unique
+  passwordHash String
+  name         String
+  role         String
+  createdAt    DateTime      @default(now())
+  teachClasses Class[]       @relation("TeacherClasses")
+  memberships  ClassMember[]
+  submissions  Submission[]
+}
+
+model Class {
+  id          String        @id @default(cuid())
+  name        String
+  code        String        @unique
+  teacherId   String
+  teacher     User          @relation("TeacherClasses", fields: [teacherId], references: [id], onDelete: Cascade)
+  assignments Assignment[]
+  members     ClassMember[]
+  createdAt   DateTime      @default(now())
+}
+
+model ClassMember {
+  id        String   @id @default(cuid())
+  classId   String
+  studentId String
+  joinedAt  DateTime @default(now())
+  class     Class    @relation(fields: [classId], references: [id], onDelete: Cascade)
+  student   User     @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  @@unique([classId, studentId])
+}
+
+model Assignment {
+  id          String       @id @default(cuid())
+  classId     String
+  title       String
+  description String?
+  dueDate     DateTime?
+  createdAt   DateTime     @default(now())
+  class       Class        @relation(fields: [classId], references: [id], onDelete: Cascade)
+  submissions Submission[]
+}
+
+model Submission {
+  id            String    @id @default(cuid())
+  assignmentId  String
+  studentId     String
+  imagePath     String
+  gradingResult String
+  createdAt     DateTime  @default(now())
+  assignment    Assignment @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+  student       User      @relation(fields: [studentId], references: [id], onDelete: Cascade)
+
+  @@unique([assignmentId, studentId])
+}
