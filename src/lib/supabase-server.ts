@@ -28,3 +28,7 @@ export function getStorageBucket() {
 export function buildSubmissionObjectKey(userId: string, assignmentId: string, ext: string) {
   return `submissions/${assignmentId}/${userId}-${Date.now()}.${ext}`;
 }
+
+export function buildTeacherAssetKey(userId: string, scope: string, ext: string) {
+  return `teacher-assets/${userId}/${scope}-${Date.now()}.${ext}`;
+}

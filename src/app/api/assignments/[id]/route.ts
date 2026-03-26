@@ -20,12 +20,17 @@ export async function GET(
       class: { include: { teacher: { select: { id: true, name: true } } } },
       questions: {
         orderBy: { orderIndex: "asc" }
+      },
+      template: {
+        select: { id: true, title: true }
       }
     }
   });
   if (!assignment) {
     return NextResponse.json({ error: "作业不存在。" }, { status: 404 });
   }
+
+  const includeReference = auth.user.role === Role.TEACHER;
 
   if (auth.user.role === Role.TEACHER) {
     if (assignment.class.teacherId !== auth.user.id) {
@@ -50,7 +55,8 @@ export async function GET(
       totalScore: assignment.totalScore,
       allowResubmission: assignment.allowResubmission,
       class: { id: assignment.class.id, name: assignment.class.name },
-      questions: assignment.questions.map(formatQuestion)
+      template: assignment.template,
+      questions: assignment.questions.map((question) => formatQuestion(question, includeReference))
     }
   });
 }

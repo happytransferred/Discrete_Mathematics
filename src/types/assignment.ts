@@ -13,6 +13,8 @@ export type AssignmentQuestionInput = {
   maxScore: number;
   options?: string[];
   referenceAnswer?: string;
+  promptImagePath?: string | null;
+  referenceImagePath?: string | null;
 };
 
 export type AssignmentQuestionView = {
@@ -20,10 +22,12 @@ export type AssignmentQuestionView = {
   orderIndex: number;
   title: string;
   prompt: string;
+  promptImagePath?: string | null;
   type: QuestionType;
   maxScore: number;
   options: string[];
   referenceAnswer?: string | null;
+  referenceImagePath?: string | null;
 };
 
 export type StudentAnswerDraft = {
@@ -31,4 +35,14 @@ export type StudentAnswerDraft = {
   type: QuestionType;
   textAnswer?: string;
   selectedOption?: string;
+};
+
+export type AssignmentTemplateView = {
+  id: string;
+  title: string;
+  description: string | null;
+  allowResubmission: boolean;
+  totalScore: number;
+  createdAt: string;
+  questions: AssignmentQuestionView[];
 };

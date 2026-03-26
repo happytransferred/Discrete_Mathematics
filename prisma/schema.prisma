@@ -18,6 +18,7 @@ model User {
   teachClasses Class[]       @relation("TeacherClasses")
   memberships  ClassMember[]
   submissions  Submission[]
+  templates    AssignmentTemplate[]
 }
 
 model Class {
@@ -45,6 +46,7 @@ model ClassMember {
 model Assignment {
   id                String               @id @default(cuid())
   classId           String
+  templateId        String?
   title             String
   description       String?
   dueDate           DateTime?
@@ -52,6 +54,7 @@ model Assignment {
   totalScore        Int                  @default(100)
   createdAt         DateTime             @default(now())
   class             Class                @relation(fields: [classId], references: [id], onDelete: Cascade)
+  template          AssignmentTemplate?  @relation(fields: [templateId], references: [id], onDelete: SetNull)
   questions         AssignmentQuestion[]
   submissions       Submission[]
 }
@@ -62,14 +65,47 @@ model AssignmentQuestion {
   orderIndex      Int
   title           String
   prompt          String
+  promptImagePath String?
   type            String
   options         String?
   referenceAnswer String?
+  referenceImagePath String?
   maxScore        Int
   assignment      Assignment         @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
   answers         SubmissionAnswer[]
 
   @@unique([assignmentId, orderIndex])
+}
+
+model AssignmentTemplate {
+  id                String                      @id @default(cuid())
+  teacherId         String
+  title             String
+  description       String?
+  allowResubmission Boolean                     @default(true)
+  totalScore        Int                         @default(100)
+  createdAt         DateTime                    @default(now())
+  updatedAt         DateTime                    @updatedAt
+  teacher           User                        @relation(fields: [teacherId], references: [id], onDelete: Cascade)
+  questions         AssignmentTemplateQuestion[]
+  assignments       Assignment[]
+}
+
+model AssignmentTemplateQuestion {
+  id                 String              @id @default(cuid())
+  templateId         String
+  orderIndex         Int
+  title              String
+  prompt             String
+  promptImagePath    String?
+  type               String
+  options            String?
+  referenceAnswer    String?
+  referenceImagePath String?
+  maxScore           Int
+  template           AssignmentTemplate  @relation(fields: [templateId], references: [id], onDelete: Cascade)
+
+  @@unique([templateId, orderIndex])
 }
 
 model Submission {

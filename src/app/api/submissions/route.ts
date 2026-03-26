@@ -71,10 +71,6 @@ function formatSubmission(
         title: string;
         prompt: string;
         type: string;
-        orderIndex: number;
-        maxScore: number;
-        options: string | null;
-        referenceAnswer: string | null;
       };
     }>;
   }
@@ -93,7 +89,7 @@ function formatSubmission(
         ...answer,
         question: answer.question
       })
-    )
+    ) || []
   };
 }
 
@@ -140,10 +136,11 @@ export async function GET(req: NextRequest) {
       },
       orderBy: [{ createdAt: "desc" }]
     });
+
     return NextResponse.json({
       assignment: {
         id: assignment.id,
-        questions: assignment.questions.map(formatQuestion)
+        questions: assignment.questions.map((question) => formatQuestion(question))
       },
       submissions: submissions.map(formatSubmission)
     });
@@ -174,7 +171,7 @@ export async function GET(req: NextRequest) {
   return NextResponse.json({
     assignment: {
       id: assignment.id,
-      questions: assignment.questions.map(formatQuestion)
+      questions: assignment.questions.map((question) => formatQuestion(question, false))
     },
     latestSubmission: submissions[0] ? formatSubmission(submissions[0]) : null,
     submissionHistory: submissions.map(formatSubmission)
@@ -249,9 +246,10 @@ export async function POST(req: NextRequest) {
     })
   );
 
+  const formattedQuestions = assignment.questions.map((question) => formatQuestion(question));
   const gradingResult = await gradeHomework({
     assignmentTitle: assignment.title,
-    questions: assignment.questions.map(formatQuestion),
+    questions: formattedQuestions,
     answers: enrichedAnswers
   });
   const serializedGradingResult = serializeGradingResult(gradingResult);

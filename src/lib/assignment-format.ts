@@ -1,4 +1,4 @@
-import type { AssignmentQuestion } from "@prisma/client";
+import type { AssignmentQuestion, AssignmentTemplateQuestion } from "@prisma/client";
 import type { AssignmentQuestionInput, AssignmentQuestionView } from "@/types/assignment";
 
 export function serializeQuestionOptions(options?: string[]) {
@@ -17,23 +17,33 @@ export function mapQuestionInput(question: AssignmentQuestionInput, index: numbe
     orderIndex: index + 1,
     title: question.title.trim() || `第${index + 1}题`,
     prompt: question.prompt.trim(),
+    promptImagePath: question.promptImagePath || null,
     type: question.type,
     maxScore: Number(question.maxScore) || 0,
     options: serializeQuestionOptions(question.options),
-    referenceAnswer: question.referenceAnswer?.trim() || null
+    referenceAnswer: question.referenceAnswer?.trim() || null,
+    referenceImagePath: question.referenceImagePath || null
   };
 }
 
-export function formatQuestion(question: AssignmentQuestion): AssignmentQuestionView {
+export function formatQuestion(
+  question: (AssignmentQuestion | AssignmentTemplateQuestion) & {
+    promptImagePath?: string | null;
+    referenceImagePath?: string | null;
+  },
+  includeReference = true
+): AssignmentQuestionView {
   return {
     id: question.id,
     orderIndex: question.orderIndex,
     title: question.title,
     prompt: question.prompt,
+    promptImagePath: question.promptImagePath || null,
     type: question.type as AssignmentQuestionView["type"],
     maxScore: question.maxScore,
     options: parseQuestionOptions(question.options),
-    referenceAnswer: question.referenceAnswer
+    referenceAnswer: includeReference ? question.referenceAnswer : null,
+    referenceImagePath: includeReference ? question.referenceImagePath || null : null
   };
 }
 

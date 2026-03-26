@@ -216,6 +216,38 @@ export default function AssignmentPage() {
         </section>
       ) : null}
 
+      {assignment ? (
+        <section className="portal-card p-4">
+          <h2 className="mb-3 font-semibold">题目结构</h2>
+          <div className="space-y-4">
+            {assignment.questions.map((question) => (
+              <article key={question.id} className="rounded-2xl border border-slate-200 p-4">
+                <div className="flex items-center justify-between gap-3">
+                  <h3 className="font-medium text-slate-900">{question.title}</h3>
+                  <span className="text-sm text-slate-500">
+                    {question.type} ｜ {question.maxScore} 分
+                  </span>
+                </div>
+                <p className="mt-2 text-sm leading-6 text-slate-600">{question.prompt}</p>
+                {question.promptImagePath ? (
+                  <img src={question.promptImagePath} alt={`${question.title}题面图片`} className="mt-3 max-h-64 rounded border" />
+                ) : null}
+                {user?.role === "TEACHER" && (question.referenceAnswer || question.referenceImagePath) ? (
+                  <div className="mt-3 rounded-xl bg-slate-50 p-3">
+                    {question.referenceAnswer ? (
+                      <p className="text-sm text-slate-700">参考答案：{question.referenceAnswer}</p>
+                    ) : null}
+                    {question.referenceImagePath ? (
+                      <img src={question.referenceImagePath} alt={`${question.title}参考答案图片`} className="mt-3 max-h-64 rounded border" />
+                    ) : null}
+                  </div>
+                ) : null}
+              </article>
+            ))}
+          </div>
+        </section>
+      ) : null}
+
       {error ? <p className="text-sm text-red-600">{error}</p> : null}
 
       {user?.role === "STUDENT" && assignment ? (
@@ -237,8 +269,6 @@ export default function AssignmentPage() {
                     </h3>
                     <span className="text-sm text-slate-500">{question.maxScore} 分</span>
                   </div>
-                  <p className="mb-3 text-sm leading-6 text-slate-600">{question.prompt}</p>
-
                   {question.type === "TEXT" ? (
                     <textarea
                       className="w-full rounded-md border border-slate-300 px-3 py-2"
@@ -289,7 +319,7 @@ export default function AssignmentPage() {
               </p>
               <p className="mt-2 text-sm text-slate-700">{latestSubmission.summary}</p>
               <div className="mt-4 space-y-3">
-                {latestSubmission.answers.map((answer) => (
+              {latestSubmission.answers.map((answer) => (
                   <article key={answer.id} className="rounded-2xl border border-slate-200 p-4">
                     <p className="font-medium text-slate-900">{answer.questionTitle}</p>
                     <p className="mt-1 text-sm text-slate-600">{answer.prompt}</p>
