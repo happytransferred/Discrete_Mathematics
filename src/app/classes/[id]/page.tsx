@@ -44,7 +44,7 @@ export default function ClassDetailPage() {
     setError("");
     try {
       const [meRes, classRes, assignmentRes] = await Promise.all([
-        fetch("/api/auth/me"),
+        fetch(`/api/auth/me`),
         fetch(`/api/classes/${classId}`),
         fetch(`/api/assignments?classId=${classId}`)
       ]);
@@ -58,19 +58,19 @@ export default function ClassDetailPage() {
 
       const classData = await classRes.json();
       if (!classRes.ok) {
-        setError(classData.error || "Failed to load class");
+        setError(classData.error || "加载班级信息失败。");
         return;
       }
       setClassInfo(classData.class);
 
       const assignmentData = await assignmentRes.json();
       if (!assignmentRes.ok) {
-        setError(assignmentData.error || "Failed to load assignments");
+        setError(assignmentData.error || "加载作业列表失败。");
         return;
       }
       setAssignments(assignmentData.assignments || []);
     } catch {
-      setError("Network error");
+      setError("网络异常，请稍后重试。");
     } finally {
       setLoading(false);
     }
@@ -98,7 +98,7 @@ export default function ClassDetailPage() {
     });
     const data = await res.json();
     if (!res.ok) {
-      setError(data.error || "Create assignment failed");
+      setError(data.error || "发布作业失败。");
       return;
     }
     setTitle("");
@@ -108,43 +108,43 @@ export default function ClassDetailPage() {
   }
 
   if (loading) {
-    return <main className="p-6">Loading...</main>;
+    return <main className="portal-shell p-6">正在加载班级信息...</main>;
   }
 
   return (
-    <main className="max-w-5xl mx-auto p-6 space-y-6">
+    <main className="portal-shell space-y-6">
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-semibold">{classInfo?.name}</h1>
           <p className="text-sm text-slate-600">
-            Class Code: {classInfo?.code} | Teacher: {classInfo?.teacher.name}
+            班级码：{classInfo?.code} ｜ 任课教师：{classInfo?.teacher.name}
           </p>
         </div>
         <Link href="/dashboard" className="text-blue-600">
-          Back to Dashboard
+          返回工作台
         </Link>
       </div>
 
       {user?.role === "TEACHER" ? (
-        <section className="rounded-xl border bg-white p-4">
-          <h2 className="font-semibold mb-3">Publish Assignment</h2>
+        <section className="portal-card p-4">
+          <h2 className="mb-3 font-semibold">发布课程作业</h2>
           <form className="space-y-2" onSubmit={createAssignment}>
             <input
               className="w-full"
-              placeholder="Assignment title"
+              placeholder="作业标题"
               value={title}
               onChange={(e) => setTitle(e.target.value)}
               required
             />
             <textarea
-              className="w-full border border-slate-300 rounded-md px-3 py-2"
-              placeholder="Description"
+              className="w-full rounded-md border border-slate-300 px-3 py-2"
+              placeholder="作业说明"
               value={description}
               onChange={(e) => setDescription(e.target.value)}
             />
             <input type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} />
-            <button type="submit" className="bg-blue-600 text-white">
-              Publish
+            <button type="submit" className="bg-teal-700 text-white">
+              发布
             </button>
           </form>
         </section>
@@ -152,10 +152,10 @@ export default function ClassDetailPage() {
 
       {error ? <p className="text-sm text-red-600">{error}</p> : null}
 
-      <section className="rounded-xl border bg-white p-4">
-        <h2 className="font-semibold mb-3">Assignments</h2>
+      <section className="portal-card p-4">
+        <h2 className="mb-3 font-semibold">班级作业</h2>
         <div className="space-y-2">
-          {assignments.length === 0 ? <p className="text-sm text-slate-500">No assignments yet</p> : null}
+          {assignments.length === 0 ? <p className="text-sm text-slate-500">暂时还没有发布作业。</p> : null}
           {assignments.map((item) => (
             <Link
               key={item.id}
@@ -164,9 +164,9 @@ export default function ClassDetailPage() {
             >
               <p className="font-medium">{item.title}</p>
               <p className="text-sm text-slate-600">
-                Due: {item.dueDate ? new Date(item.dueDate).toLocaleDateString() : "Not set"}
+                截止日期：{item.dueDate ? new Date(item.dueDate).toLocaleDateString("zh-CN") : "未设置"}
               </p>
-              {item.description ? <p className="text-sm mt-1">{item.description}</p> : null}
+              {item.description ? <p className="mt-1 text-sm">{item.description}</p> : null}
             </Link>
           ))}
         </div>

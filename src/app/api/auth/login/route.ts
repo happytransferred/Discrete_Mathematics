@@ -10,17 +10,17 @@ export async function POST(req: NextRequest) {
   const password = String(body.password || "");
 
   if (!email || !password) {
-    return NextResponse.json({ error: "Invalid payload" }, { status: 400 });
+    return NextResponse.json({ error: "请求参数不完整。" }, { status: 400 });
   }
 
   const user = await prisma.user.findUnique({ where: { email } });
   if (!user) {
-    return NextResponse.json({ error: "Invalid email or password" }, { status: 401 });
+    return NextResponse.json({ error: "邮箱或密码错误。" }, { status: 401 });
   }
 
   const ok = await verifyPassword(password, user.passwordHash);
   if (!ok) {
-    return NextResponse.json({ error: "Invalid email or password" }, { status: 401 });
+    return NextResponse.json({ error: "邮箱或密码错误。" }, { status: 401 });
   }
 
   const token = await createSessionToken(user);

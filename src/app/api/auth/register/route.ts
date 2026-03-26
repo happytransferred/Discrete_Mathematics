@@ -13,12 +13,12 @@ export async function POST(req: NextRequest) {
   const role = String(body.role || "");
 
   if (!email || !password || !name || !isRole(role)) {
-    return NextResponse.json({ error: "Invalid payload" }, { status: 400 });
+    return NextResponse.json({ error: "注册信息不完整。" }, { status: 400 });
   }
 
   const exists = await prisma.user.findUnique({ where: { email } });
   if (exists) {
-    return NextResponse.json({ error: "Email already registered" }, { status: 409 });
+    return NextResponse.json({ error: "该邮箱已注册，请直接登录。" }, { status: 409 });
   }
 
   const user = await prisma.user.create({

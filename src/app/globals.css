@@ -2,6 +2,56 @@
 @tailwind components;
 @tailwind utilities;
 
+@layer base {
+  :root {
+    color-scheme: light;
+  }
+
+  body {
+    background:
+      radial-gradient(circle at top left, rgba(19, 78, 74, 0.16), transparent 30%),
+      radial-gradient(circle at top right, rgba(245, 158, 11, 0.18), transparent 26%),
+      linear-gradient(180deg, #f8fafc 0%, #eef2ff 100%);
+    color: #0f172a;
+    font-family: "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    min-height: 100vh;
+  }
+}
+
+@layer components {
+  .portal-shell {
+    @apply mx-auto w-full max-w-7xl px-4 py-6 sm:px-6 lg:px-8;
+  }
+
+  .portal-card {
+    @apply rounded-3xl border border-slate-200/70 bg-white/85 shadow-[0_20px_60px_rgba(15,23,42,0.08)] backdrop-blur;
+  }
+
+  .portal-muted {
+    @apply text-sm leading-6 text-slate-600;
+  }
+
+  .portal-title {
+    @apply text-3xl font-semibold tracking-tight text-slate-950 sm:text-4xl;
+  }
+
+  .portal-section-title {
+    @apply text-xl font-semibold text-slate-900;
+  }
+
+  .portal-button-primary {
+    @apply inline-flex items-center justify-center rounded-full bg-teal-700 px-5 py-3 text-sm font-semibold text-white transition hover:bg-teal-800;
+  }
+
+  .portal-button-secondary {
+    @apply inline-flex items-center justify-center rounded-full border border-slate-300 bg-white px-5 py-3 text-sm font-semibold text-slate-700 transition hover:border-slate-400 hover:bg-slate-50;
+  }
+
+  .portal-chip {
+    @apply inline-flex items-center rounded-full border border-teal-200 bg-teal-50 px-3 py-1 text-xs font-medium text-teal-700;
+  }
+}
+
 body {
   @apply bg-slate-50 text-slate-900;
 }
