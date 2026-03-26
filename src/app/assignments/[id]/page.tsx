@@ -1,9 +1,9 @@
 "use client";
 
 import Link from "next/link";
-import { ChangeEvent, FormEvent, useEffect, useState } from "react";
+import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
-import { GradingResult } from "@/types/grading";
+import type { AssignmentQuestionView, StudentAnswerDraft } from "@/types/assignment";
 
 type User = {
   id: string;
@@ -17,16 +17,35 @@ type Assignment = {
   description: string | null;
   dueDate: string | null;
   classId: string;
+  totalScore: number;
+  allowResubmission: boolean;
   class: { id: string; name: string };
+  questions: AssignmentQuestionView[];
 };
 
-type Submission = {
+type SubmissionAnswerView = {
   id: string;
-  studentId: string;
-  imagePath: string;
-  gradingResult: GradingResult;
+  questionId: string;
+  questionTitle: string;
+  questionType: string;
+  prompt: string;
+  textAnswer?: string | null;
+  selectedOption?: string | null;
+  imagePath?: string | null;
+  score: number;
+  maxScore: number;
+  feedback: string;
+};
+
+type SubmissionView = {
+  id: string;
+  attemptNumber: number;
+  overallScore: number;
+  maxScore: number;
+  summary: string;
   createdAt: string;
   student?: { name: string; email: string };
+  answers: SubmissionAnswerView[];
 };
 
 export default function AssignmentPage() {
@@ -36,9 +55,11 @@ export default function AssignmentPage() {
 
   const [user, setUser] = useState<User | null>(null);
   const [assignment, setAssignment] = useState<Assignment | null>(null);
-  const [submission, setSubmission] = useState<Submission | null>(null);
-  const [submissions, setSubmissions] = useState<Submission[]>([]);
-  const [file, setFile] = useState<File | null>(null);
+  const [latestSubmission, setLatestSubmission] = useState<SubmissionView | null>(null);
+  const [submissionHistory, setSubmissionHistory] = useState<SubmissionView[]>([]);
+  const [submissions, setSubmissions] = useState<SubmissionView[]>([]);
+  const [draftAnswers, setDraftAnswers] = useState<Record<string, StudentAnswerDraft>>({});
+  const [draftFiles, setDraftFiles] = useState<Record<string, File | null>>({});
   const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
   const [loading, setLoading] = useState(true);
@@ -77,7 +98,8 @@ export default function AssignmentPage() {
       if (meData.role === "TEACHER") {
         setSubmissions(submissionsData.submissions || []);
       } else {
-        setSubmission(submissionsData.submission || null);
+        setLatestSubmission(submissionsData.latestSubmission || null);
+        setSubmissionHistory(submissionsData.submissionHistory || []);
       }
     } catch {
       setError("网络异常，请稍后重试。");
@@ -93,22 +115,60 @@ export default function AssignmentPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [assignmentId]);
 
-  function handleFileChange(e: ChangeEvent<HTMLInputElement>) {
-    setFile(e.target.files?.[0] || null);
+  const isExpired = useMemo(() => {
+    if (!assignment?.dueDate) {
+      return false;
+    }
+    return new Date(assignment.dueDate).getTime() < Date.now();
+  }, [assignment?.dueDate]);
+
+  function updateTextAnswer(questionId: string, textAnswer: string) {
+    setDraftAnswers((current) => ({
+      ...current,
+      [questionId]: {
+        questionId,
+        type: assignment?.questions.find((item) => item.id === questionId)?.type || "TEXT",
+        textAnswer
+      }
+    }));
+  }
+
+  function updateChoiceAnswer(questionId: string, selectedOption: string) {
+    setDraftAnswers((current) => ({
+      ...current,
+      [questionId]: {
+        questionId,
+        type: assignment?.questions.find((item) => item.id === questionId)?.type || "CHOICE",
+        selectedOption
+      }
+    }));
+  }
+
+  function updateFile(questionId: string, e: ChangeEvent<HTMLInputElement>) {
+    setDraftFiles((current) => ({
+      ...current,
+      [questionId]: e.target.files?.[0] || null
+    }));
   }
 
   async function uploadSubmission(e: FormEvent) {
     e.preventDefault();
-    if (!file) {
-      setError("请先选择作业图片。");
+    if (!assignment) {
       return;
     }
 
     setPending(true);
     setError("");
+
     const formData = new FormData();
     formData.set("assignmentId", assignmentId);
-    formData.set("image", file);
+    formData.set("answers", JSON.stringify(Object.values(draftAnswers)));
+
+    Object.entries(draftFiles).forEach(([questionId, file]) => {
+      if (file) {
+        formData.set(`image_${questionId}`, file);
+      }
+    });
 
     try {
       const res = await fetch("/api/submissions", {
@@ -120,8 +180,9 @@ export default function AssignmentPage() {
         setError(data.error || "提交失败，请稍后再试。");
         return;
       }
-      setSubmission(data.submission);
-      setFile(null);
+      setLatestSubmission(data.submission);
+      setSubmissionHistory((current) => [data.submission, ...current]);
+      setDraftFiles({});
     } catch {
       setError("网络异常，请稍后重试。");
     } finally {
@@ -139,7 +200,7 @@ export default function AssignmentPage() {
         <div>
           <h1 className="text-2xl font-semibold">{assignment?.title}</h1>
           <p className="text-sm text-slate-600">
-            所属班级：{assignment?.class.name} ｜ 截止时间：
+            所属班级：{assignment?.class.name} ｜ 总分：{assignment?.totalScore} ｜ 截止时间：
             {assignment?.dueDate ? ` ${new Date(assignment.dueDate).toLocaleString("zh-CN")}` : " 未设置"}
           </p>
         </div>
@@ -157,65 +218,154 @@ export default function AssignmentPage() {
 
       {error ? <p className="text-sm text-red-600">{error}</p> : null}
 
-      {user?.role === "STUDENT" ? (
+      {user?.role === "STUDENT" && assignment ? (
         <>
-          <section className="portal-card p-4">
-            <h2 className="mb-3 font-semibold">上传作业图片</h2>
-            <form onSubmit={uploadSubmission} className="space-y-2">
-              <input type="file" accept="image/*" onChange={handleFileChange} required={!submission} />
-              <button type="submit" className="bg-teal-700 text-white disabled:opacity-50" disabled={pending}>
-                {pending ? "上传中..." : submission ? "重新提交并评分" : "提交并查看反馈"}
+          <section className="portal-card p-5">
+            <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+              <h2 className="text-xl font-semibold">作答与提交</h2>
+              <div className="text-sm text-slate-600">
+                {isExpired ? "状态：已截止" : `状态：${assignment.allowResubmission ? "允许重复提交" : "仅允许提交一次"}`}
+              </div>
+            </div>
+
+            <form onSubmit={uploadSubmission} className="space-y-4">
+              {assignment.questions.map((question, index) => (
+                <article key={question.id} className="rounded-2xl border border-slate-200 p-4">
+                  <div className="mb-2 flex items-center justify-between gap-3">
+                    <h3 className="font-medium text-slate-900">
+                      第 {index + 1} 题：{question.title}
+                    </h3>
+                    <span className="text-sm text-slate-500">{question.maxScore} 分</span>
+                  </div>
+                  <p className="mb-3 text-sm leading-6 text-slate-600">{question.prompt}</p>
+
+                  {question.type === "TEXT" ? (
+                    <textarea
+                      className="w-full rounded-md border border-slate-300 px-3 py-2"
+                      placeholder="请输入文本答案"
+                      value={draftAnswers[question.id]?.textAnswer || ""}
+                      onChange={(e) => updateTextAnswer(question.id, e.target.value)}
+                    />
+                  ) : null}
+
+                  {question.type === "CHOICE" ? (
+                    <div className="space-y-2">
+                      {question.options.map((option) => (
+                        <label key={option} className="flex items-center gap-2 text-sm text-slate-700">
+                          <input
+                            type="radio"
+                            name={`choice-${question.id}`}
+                            value={option}
+                            checked={draftAnswers[question.id]?.selectedOption === option}
+                            onChange={(e) => updateChoiceAnswer(question.id, e.target.value)}
+                          />
+                          {option}
+                        </label>
+                      ))}
+                    </div>
+                  ) : null}
+
+                  {question.type === "IMAGE" ? (
+                    <input type="file" accept="image/*" onChange={(e) => updateFile(question.id, e)} />
+                  ) : null}
+                </article>
+              ))}
+
+              <button
+                type="submit"
+                className="portal-button-primary"
+                disabled={pending || isExpired}
+              >
+                {pending ? "提交中..." : latestSubmission ? "再次提交并生成新记录" : "提交作业"}
               </button>
             </form>
           </section>
 
-          {submission ? (
-            <section className="portal-card p-4 space-y-3">
-              <h2 className="font-semibold">我的评分结果</h2>
-              <img src={submission.imagePath} alt="submission" className="max-h-64 rounded border" />
-              <p className="font-medium">
-                得分：{submission.gradingResult.overallScore}/{submission.gradingResult.maxScore}
+          {latestSubmission ? (
+            <section className="portal-card p-5">
+              <h2 className="mb-3 text-xl font-semibold">最近一次成绩详情</h2>
+              <p className="text-sm text-slate-600">
+                第 {latestSubmission.attemptNumber} 次提交 ｜ 得分 {latestSubmission.overallScore}/{latestSubmission.maxScore}
               </p>
-              <p className="text-sm">{submission.gradingResult.summary}</p>
-              <div className="space-y-2">
-                {submission.gradingResult.checks.map((check) => (
-                  <div key={check.item} className="rounded border p-2 text-sm">
-                    <p className="font-medium">
-                      {check.item}：{check.score}/{check.maxScore}
+              <p className="mt-2 text-sm text-slate-700">{latestSubmission.summary}</p>
+              <div className="mt-4 space-y-3">
+                {latestSubmission.answers.map((answer) => (
+                  <article key={answer.id} className="rounded-2xl border border-slate-200 p-4">
+                    <p className="font-medium text-slate-900">{answer.questionTitle}</p>
+                    <p className="mt-1 text-sm text-slate-600">{answer.prompt}</p>
+                    <p className="mt-2 text-sm text-slate-700">
+                      得分：{answer.score}/{answer.maxScore}
                     </p>
-                    <p>{check.comment}</p>
-                  </div>
+                    {answer.textAnswer ? <p className="mt-2 text-sm text-slate-700">文本答案：{answer.textAnswer}</p> : null}
+                    {answer.selectedOption ? <p className="mt-2 text-sm text-slate-700">选择答案：{answer.selectedOption}</p> : null}
+                    {answer.imagePath ? (
+                      <img src={answer.imagePath} alt="submission" className="mt-3 max-h-56 rounded border" />
+                    ) : null}
+                    <p className="mt-2 text-sm text-slate-600">反馈：{answer.feedback}</p>
+                  </article>
                 ))}
-              </div>
-              <div>
-                <p className="text-sm font-medium">改进建议</p>
-                <ul className="ml-5 list-disc text-sm">
-                  {submission.gradingResult.suggestions.map((tip) => (
-                    <li key={tip}>{tip}</li>
-                  ))}
-                </ul>
               </div>
             </section>
           ) : null}
+
+          <section className="portal-card p-5">
+            <h2 className="mb-3 text-xl font-semibold">历史提交记录</h2>
+            <div className="space-y-3">
+              {submissionHistory.length === 0 ? <p className="text-sm text-slate-500">暂无提交记录。</p> : null}
+              {submissionHistory.map((item) => (
+                <article key={item.id} className="rounded-2xl border border-slate-200 p-4">
+                  <p className="font-medium text-slate-900">
+                    第 {item.attemptNumber} 次提交 ｜ 得分 {item.overallScore}/{item.maxScore}
+                  </p>
+                  <p className="mt-1 text-sm text-slate-600">
+                    提交时间：{new Date(item.createdAt).toLocaleString("zh-CN")}
+                  </p>
+                  <p className="mt-2 text-sm text-slate-700">{item.summary}</p>
+                </article>
+              ))}
+            </div>
+          </section>
         </>
       ) : null}
 
       {user?.role === "TEACHER" ? (
-        <section className="portal-card p-4">
-          <h2 className="mb-3 font-semibold">班级提交情况</h2>
-          <div className="space-y-3">
+        <section className="portal-card p-5">
+          <h2 className="mb-3 text-xl font-semibold">教师端成绩详情</h2>
+          <div className="space-y-4">
             {submissions.length === 0 ? <p className="text-sm text-slate-500">暂时还没有学生提交。</p> : null}
             {submissions.map((item) => (
-              <article key={item.id} className="rounded border p-3">
-                <p className="font-medium">
-                  {item.student?.name} ({item.student?.email})
-                </p>
-                <p className="mb-2 text-sm">
-                  得分：{item.gradingResult.overallScore}/{item.gradingResult.maxScore} ｜ 提交时间：
-                  {` ${new Date(item.createdAt).toLocaleString("zh-CN")}`}
-                </p>
-                <img src={item.imagePath} alt="submission" className="mb-2 max-h-56 rounded border" />
-                <p className="text-sm">{item.gradingResult.summary}</p>
+              <article key={item.id} className="rounded-2xl border border-slate-200 p-4">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div>
+                    <p className="font-medium text-slate-900">
+                      {item.student?.name}（{item.student?.email}）
+                    </p>
+                    <p className="text-sm text-slate-600">
+                      第 {item.attemptNumber} 次提交 ｜ 得分 {item.overallScore}/{item.maxScore}
+                    </p>
+                  </div>
+                  <span className="text-sm text-slate-500">
+                    {new Date(item.createdAt).toLocaleString("zh-CN")}
+                  </span>
+                </div>
+
+                <div className="mt-4 space-y-3">
+                  {item.answers.map((answer) => (
+                    <div key={answer.id} className="rounded-xl bg-slate-50 p-4">
+                      <p className="font-medium text-slate-900">{answer.questionTitle}</p>
+                      <p className="mt-1 text-sm text-slate-600">{answer.prompt}</p>
+                      <p className="mt-2 text-sm text-slate-700">
+                        得分：{answer.score}/{answer.maxScore}
+                      </p>
+                      {answer.textAnswer ? <p className="mt-2 text-sm text-slate-700">文本答案：{answer.textAnswer}</p> : null}
+                      {answer.selectedOption ? <p className="mt-2 text-sm text-slate-700">选择答案：{answer.selectedOption}</p> : null}
+                      {answer.imagePath ? (
+                        <img src={answer.imagePath} alt="submission" className="mt-3 max-h-56 rounded border" />
+                      ) : null}
+                      <p className="mt-2 text-sm text-slate-600">反馈：{answer.feedback}</p>
+                    </div>
+                  ))}
+                </div>
               </article>
             ))}
           </div>

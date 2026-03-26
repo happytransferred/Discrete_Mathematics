@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { formatQuestion } from "@/lib/assignment-format";
 import { requireAuth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { Role } from "@/lib/roles";
@@ -16,25 +17,40 @@ export async function GET(
   const assignment = await prisma.assignment.findUnique({
     where: { id: assignmentId },
     include: {
-      class: { include: { teacher: { select: { id: true, name: true } } } }
+      class: { include: { teacher: { select: { id: true, name: true } } } },
+      questions: {
+        orderBy: { orderIndex: "asc" }
+      }
     }
   });
   if (!assignment) {
-    return NextResponse.json({ error: "Assignment not found" }, { status: 404 });
+    return NextResponse.json({ error: "作业不存在。" }, { status: 404 });
   }
 
   if (auth.user.role === Role.TEACHER) {
     if (assignment.class.teacherId !== auth.user.id) {
-      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+      return NextResponse.json({ error: "无权查看该作业。" }, { status: 403 });
     }
   } else {
     const membership = await prisma.classMember.findFirst({
       where: { classId: assignment.classId, studentId: auth.user.id }
     });
     if (!membership) {
-      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+      return NextResponse.json({ error: "无权查看该作业。" }, { status: 403 });
     }
   }
 
-  return NextResponse.json({ assignment });
+  return NextResponse.json({
+    assignment: {
+      id: assignment.id,
+      title: assignment.title,
+      description: assignment.description,
+      dueDate: assignment.dueDate,
+      classId: assignment.classId,
+      totalScore: assignment.totalScore,
+      allowResubmission: assignment.allowResubmission,
+      class: { id: assignment.class.id, name: assignment.class.name },
+      questions: assignment.questions.map(formatQuestion)
+    }
+  });
 }
