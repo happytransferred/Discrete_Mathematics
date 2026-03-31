@@ -1,4 +1,4 @@
-import { getOpenAiApiKey, getOpenAiModel } from "@/lib/env";
+import { getAiApiKey, getAiBaseUrl, getAiModel, getAiProvider } from "@/lib/env";
 import type { AssignmentQuestionView, StudentAnswerDraft } from "@/types/assignment";
 import type { GradingResult } from "@/types/grading";
 
@@ -27,6 +27,14 @@ type AiQuestionResult = {
   score: number;
   comment: string;
   suggestions?: string[];
+};
+
+type ProviderConfig = {
+  provider: "openai" | "deepseek" | "kimi";
+  apiKey: string;
+  model: string;
+  baseUrl: string;
+  supportsVision: boolean;
 };
 
 function scoreTextAnswerFallback(answer: string, maxScore: number) {
@@ -97,22 +105,31 @@ function parseJsonObject(text: string) {
   return JSON.parse(text.slice(firstBrace, lastBrace + 1)) as AiQuestionResult;
 }
 
-async function callOpenAiForQuestion(args: {
+function getProviderConfig(): ProviderConfig | null {
+  const provider = getAiProvider();
+  const apiKey = getAiApiKey(provider);
+  if (!provider || !apiKey) {
+    return null;
+  }
+
+  const normalized = provider === "deepseek" || provider === "kimi" ? provider : "openai";
+  return {
+    provider: normalized,
+    apiKey,
+    model: getAiModel(normalized) || "gpt-5.2",
+    baseUrl: getAiBaseUrl(normalized) || "https://api.openai.com/v1",
+    supportsVision: normalized !== "deepseek"
+  };
+}
+
+function buildScoringPrompt(args: {
   assignmentTitle: string;
   assignmentDescription?: string | null;
   question: AssignmentQuestionView;
   answer: StudentAnswerDraft & { imagePath?: string | null };
+  supportsVision: boolean;
 }) {
-  const apiKey = getOpenAiApiKey();
-  if (!apiKey) {
-    return null;
-  }
-
-  const model = getOpenAiModel();
-  const systemPrompt =
-    "你是一名中国高校离散数学助教。请根据题面、评分标准、参考答案和学生作答给出严格但鼓励式的评分。只输出 JSON。";
-
-  const userText = [
+  return [
     `课程任务：${args.assignmentTitle}`,
     args.assignmentDescription ? `作业说明：${args.assignmentDescription}` : null,
     `题目标题：${args.question.title}`,
@@ -123,44 +140,160 @@ async function callOpenAiForQuestion(args: {
     args.question.referenceAnswer ? `参考答案：${args.question.referenceAnswer}` : null,
     args.answer.textAnswer ? `学生文本答案：${args.answer.textAnswer}` : null,
     args.answer.selectedOption ? `学生选择答案：${args.answer.selectedOption}` : null,
-    args.answer.imagePath ? "学生还上传了图片答案，请结合图片一起判断。" : null,
+    !args.supportsVision && args.question.promptImagePath
+      ? `题面图片链接：${args.question.promptImagePath}`
+      : null,
+    !args.supportsVision && args.question.referenceImagePath
+      ? `参考答案图片链接：${args.question.referenceImagePath}`
+      : null,
+    !args.supportsVision && args.answer.imagePath
+      ? `学生图片答案链接：${args.answer.imagePath}`
+      : null,
+    !args.supportsVision && (args.question.promptImagePath || args.question.referenceImagePath || args.answer.imagePath)
+      ? "当前模型未启用图片理解，请仅依据可读文本和链接上下文给出保守评分，并提示教师复核。"
+      : null,
     "请返回格式：{\"score\": number, \"comment\": string, \"suggestions\": [string]}",
     `要求：score 必须在 0 到 ${args.question.maxScore} 之间，comment 用中文，指出得分依据。`
   ]
     .filter(Boolean)
     .join("\n");
+}
 
-  const inputContent: Array<Record<string, string>> = [
-    { type: "input_text", text: userText }
+async function callCompatibleChatCompletion(args: {
+  config: ProviderConfig;
+  assignmentTitle: string;
+  assignmentDescription?: string | null;
+  question: AssignmentQuestionView;
+  answer: StudentAnswerDraft & { imagePath?: string | null };
+}) {
+  const systemPrompt =
+    "你是一名中国高校离散数学助教。请根据题面、评分标准、参考答案和学生作答给出严格但鼓励式的评分。只输出 JSON。";
+
+  const userText = buildScoringPrompt({
+    assignmentTitle: args.assignmentTitle,
+    assignmentDescription: args.assignmentDescription,
+    question: args.question,
+    answer: args.answer,
+    supportsVision: args.config.supportsVision
+  });
+
+  const userContent: Array<Record<string, unknown>> = [
+    {
+      type: "text",
+      text: userText
+    }
   ];
 
-  if (args.question.promptImagePath) {
-    inputContent.push({
-      type: "input_image",
-      image_url: args.question.promptImagePath
-    });
-  }
-  if (args.question.referenceImagePath) {
-    inputContent.push({
-      type: "input_image",
-      image_url: args.question.referenceImagePath
-    });
-  }
-  if (args.answer.imagePath) {
-    inputContent.push({
-      type: "input_image",
-      image_url: args.answer.imagePath
-    });
+  if (args.config.supportsVision) {
+    if (args.question.promptImagePath) {
+      userContent.push({
+        type: "image_url",
+        image_url: { url: args.question.promptImagePath }
+      });
+    }
+    if (args.question.referenceImagePath) {
+      userContent.push({
+        type: "image_url",
+        image_url: { url: args.question.referenceImagePath }
+      });
+    }
+    if (args.answer.imagePath) {
+      userContent.push({
+        type: "image_url",
+        image_url: { url: args.answer.imagePath }
+      });
+    }
   }
 
-  const response = await fetch("https://api.openai.com/v1/responses", {
+  const response = await fetch(`${args.config.baseUrl}/chat/completions`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`
+      Authorization: `Bearer ${args.config.apiKey}`
     },
     body: JSON.stringify({
-      model,
+      model: args.config.model,
+      messages: [
+        {
+          role: "system",
+          content: systemPrompt
+        },
+        {
+          role: "user",
+          content: userContent
+        }
+      ],
+      temperature: 0.2
+    })
+  });
+
+  if (!response.ok) {
+    throw new Error(`AI request failed: ${response.status}`);
+  }
+
+  const payload = (await response.json()) as {
+    choices?: Array<{ message?: { content?: string | Array<{ text?: string }> } }>;
+  };
+
+  const content = payload.choices?.[0]?.message?.content;
+  const text =
+    typeof content === "string"
+      ? content
+      : Array.isArray(content)
+        ? content.map((item) => item.text || "").join("")
+        : "";
+
+  if (!text) {
+    throw new Error("AI response missing content");
+  }
+
+  const parsed = parseJsonObject(text);
+  return {
+    score: Math.max(0, Math.min(args.question.maxScore, Math.round(parsed.score || 0))),
+    comment: parsed.comment || "AI 已完成评分，但未返回详细评语。",
+    suggestions: parsed.suggestions || [],
+    model: args.config.model
+  };
+}
+
+async function callOpenAiResponses(args: {
+  config: ProviderConfig;
+  assignmentTitle: string;
+  assignmentDescription?: string | null;
+  question: AssignmentQuestionView;
+  answer: StudentAnswerDraft & { imagePath?: string | null };
+}) {
+  const systemPrompt =
+    "你是一名中国高校离散数学助教。请根据题面、评分标准、参考答案和学生作答给出严格但鼓励式的评分。只输出 JSON。";
+
+  const userText = buildScoringPrompt({
+    assignmentTitle: args.assignmentTitle,
+    assignmentDescription: args.assignmentDescription,
+    question: args.question,
+    answer: args.answer,
+    supportsVision: true
+  });
+
+  const inputContent: Array<Record<string, string>> = [{ type: "input_text", text: userText }];
+
+  if (args.question.promptImagePath) {
+    inputContent.push({ type: "input_image", image_url: args.question.promptImagePath });
+  }
+  if (args.question.referenceImagePath) {
+    inputContent.push({ type: "input_image", image_url: args.question.referenceImagePath });
+  }
+  if (args.answer.imagePath) {
+    inputContent.push({ type: "input_image", image_url: args.answer.imagePath });
+  }
+
+  const response = await fetch(`${args.config.baseUrl}/responses`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${args.config.apiKey}`
+    },
+    body: JSON.stringify({
+      model: args.config.model,
       input: [
         {
           role: "system",
@@ -188,8 +321,46 @@ async function callOpenAiForQuestion(args: {
     score: Math.max(0, Math.min(args.question.maxScore, Math.round(parsed.score || 0))),
     comment: parsed.comment || "AI 已完成评分，但未返回详细评语。",
     suggestions: parsed.suggestions || [],
-    model
+    model: args.config.model
   };
+}
+
+async function callAiForQuestion(args: {
+  assignmentTitle: string;
+  assignmentDescription?: string | null;
+  question: AssignmentQuestionView;
+  answer: StudentAnswerDraft & { imagePath?: string | null };
+}) {
+  const config = getProviderConfig();
+  if (!config) {
+    return null;
+  }
+
+  if (
+    !config.supportsVision &&
+    args.question.type === "IMAGE" &&
+    (args.answer.imagePath || args.question.promptImagePath || args.question.referenceImagePath)
+  ) {
+    return null;
+  }
+
+  if (config.provider === "openai") {
+    return callOpenAiResponses({
+      config,
+      assignmentTitle: args.assignmentTitle,
+      assignmentDescription: args.assignmentDescription,
+      question: args.question,
+      answer: args.answer
+    });
+  }
+
+  return callCompatibleChatCompletion({
+    config,
+    assignmentTitle: args.assignmentTitle,
+    assignmentDescription: args.assignmentDescription,
+    question: args.question,
+    answer: args.answer
+  });
 }
 
 async function gradeQuestion(
@@ -217,7 +388,7 @@ async function gradeQuestion(
   }
 
   try {
-    const aiResult = await callOpenAiForQuestion({
+    const aiResult = await callAiForQuestion({
       assignmentTitle,
       assignmentDescription,
       question,
@@ -241,7 +412,7 @@ async function gradeQuestion(
       };
     }
   } catch {
-    // fall back below
+    // fall through to rule-based fallback
   }
 
   const fallback =
