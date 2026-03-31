@@ -47,6 +47,7 @@ type DraftQuestion = {
   maxScore: number;
   optionsText: string;
   referenceAnswer: string;
+  gradingRubric: string;
   promptImagePath?: string | null;
   referenceImagePath?: string | null;
 };
@@ -58,6 +59,7 @@ const emptyQuestion: DraftQuestion = {
   maxScore: 20,
   optionsText: "",
   referenceAnswer: "",
+  gradingRubric: "",
   promptImagePath: null,
   referenceImagePath: null
 };
@@ -219,6 +221,7 @@ export default function ClassDetailPage() {
               .filter(Boolean)
           : [],
       referenceAnswer: question.referenceAnswer.trim(),
+      gradingRubric: question.gradingRubric.trim(),
       promptImagePath: question.promptImagePath || null,
       referenceImagePath: question.referenceImagePath || null
     }));
@@ -332,6 +335,7 @@ export default function ClassDetailPage() {
             maxScore: question.maxScore,
             optionsText: question.options.join("\n"),
             referenceAnswer: question.referenceAnswer || "",
+            gradingRubric: question.gradingRubric || "",
             promptImagePath: question.promptImagePath || null,
             referenceImagePath: question.referenceImagePath || null
           }))
@@ -456,11 +460,7 @@ export default function ClassDetailPage() {
               <div className="grid gap-3 md:grid-cols-2">
                 <label className="space-y-2 text-sm text-slate-700">
                   <span>截止时间</span>
-                  <input
-                    type="datetime-local"
-                    value={dueDate}
-                    onChange={(e) => setDueDate(e.target.value)}
-                  />
+                  <input type="datetime-local" value={dueDate} onChange={(e) => setDueDate(e.target.value)} />
                 </label>
                 <label className="flex items-center gap-2 rounded-xl border border-slate-200 px-4 py-3 text-sm text-slate-700">
                   <input
@@ -564,6 +564,13 @@ export default function ClassDetailPage() {
                       />
                     </div>
 
+                    <textarea
+                      className="mt-3 w-full rounded-md border border-slate-300 px-3 py-2"
+                      placeholder="评分 rubric，例如：定义是否准确、推理是否完整、结论是否规范。"
+                      value={question.gradingRubric}
+                      onChange={(e) => updateQuestion(index, "gradingRubric", e.target.value)}
+                    />
+
                     {question.type === QUESTION_TYPES.CHOICE ? (
                       <textarea
                         className="mt-3 w-full rounded-md border border-slate-300 px-3 py-2"
@@ -586,11 +593,7 @@ export default function ClassDetailPage() {
                   disabled={savingTemplate}
                   onClick={saveTemplate}
                 >
-                  {savingTemplate
-                    ? "保存中..."
-                    : editingTemplateId
-                      ? "更新作业库条目"
-                      : "保存到作业库"}
+                  {savingTemplate ? "保存中..." : editingTemplateId ? "更新作业库条目" : "保存到作业库"}
                 </button>
                 <button type="submit" className="portal-button-primary" disabled={publishingAssignment}>
                   {publishingAssignment ? "发布中..." : "发布到当前班级"}
@@ -608,9 +611,7 @@ export default function ClassDetailPage() {
             </div>
 
             <div className="space-y-4">
-              {templates.length === 0 ? (
-                <p className="text-sm text-slate-500">当前还没有作业库内容。</p>
-              ) : null}
+              {templates.length === 0 ? <p className="text-sm text-slate-500">当前还没有作业库内容。</p> : null}
 
               {templates.map((template) => (
                 <article key={template.id} className="rounded-2xl border border-slate-200 p-4">
@@ -621,12 +622,8 @@ export default function ClassDetailPage() {
                         题目数：{template.questions.length} | 总分：{template.totalScore} | 允许重复提交：
                         {template.allowResubmission ? "是" : "否"}
                       </p>
-                      <p className="mt-1 text-sm text-slate-500">
-                        最近保存：{formatDateTime(template.createdAt)}
-                      </p>
-                      {template.description ? (
-                        <p className="mt-2 text-sm text-slate-600">{template.description}</p>
-                      ) : null}
+                      <p className="mt-1 text-sm text-slate-500">最近保存：{formatDateTime(template.createdAt)}</p>
+                      {template.description ? <p className="mt-2 text-sm text-slate-600">{template.description}</p> : null}
                     </div>
 
                     <div className="flex flex-wrap gap-2">
@@ -679,6 +676,9 @@ export default function ClassDetailPage() {
                         <p className="mt-2 text-sm text-slate-500">
                           类型：{question.type} | 分值：{question.maxScore}
                         </p>
+                        {question.gradingRubric ? (
+                          <p className="mt-2 text-sm text-slate-500">评分标准：{question.gradingRubric}</p>
+                        ) : null}
                       </div>
                     ))}
                   </div>
@@ -694,9 +694,7 @@ export default function ClassDetailPage() {
       <section className="portal-card p-5">
         <h2 className="mb-3 text-xl font-semibold">班级作业</h2>
         <div className="space-y-3">
-          {assignments.length === 0 ? (
-            <p className="text-sm text-slate-500">暂时还没有发布作业。</p>
-          ) : null}
+          {assignments.length === 0 ? <p className="text-sm text-slate-500">暂时还没有发布作业。</p> : null}
 
           {assignments.map((item) => (
             <Link
@@ -712,9 +710,7 @@ export default function ClassDetailPage() {
                     {item.allowResubmission ? "是" : "否"}
                   </p>
                   <p className="mt-1 text-sm text-slate-600">截止日期：{formatDateTime(item.dueDate)}</p>
-                  {item.template ? (
-                    <p className="mt-1 text-sm text-teal-700">来源作业库：{item.template.title}</p>
-                  ) : null}
+                  {item.template ? <p className="mt-1 text-sm text-teal-700">来源作业库：{item.template.title}</p> : null}
                 </div>
 
                 {item.latestSubmission ? (

@@ -15,6 +15,7 @@ export type AssignmentQuestionInput = {
   referenceAnswer?: string;
   promptImagePath?: string | null;
   referenceImagePath?: string | null;
+  gradingRubric?: string;
 };
 
 export type AssignmentQuestionView = {
@@ -28,6 +29,7 @@ export type AssignmentQuestionView = {
   options: string[];
   referenceAnswer?: string | null;
   referenceImagePath?: string | null;
+  gradingRubric?: string | null;
 };
 
 export type StudentAnswerDraft = {

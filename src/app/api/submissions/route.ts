@@ -51,10 +51,14 @@ function formatSubmission(
   submission: {
     id: string;
     attemptNumber: number;
+    gradingStatus: string;
+    aiSummary: string | null;
     overallScore: number;
     maxScore: number;
     summary: string;
+    aiGradingResult: string | null;
     gradingResult: string;
+    reviewedAt: Date | null;
     createdAt: Date;
     student?: { id: string; name: string; email: string } | null;
     answers?: Array<{
@@ -63,6 +67,10 @@ function formatSubmission(
       textAnswer: string | null;
       selectedOption: string | null;
       imagePath: string | null;
+      aiScore: number | null;
+      aiFeedback: string | null;
+      teacherScore: number | null;
+      teacherFeedback: string | null;
       score: number;
       maxScore: number;
       feedback: string;
@@ -78,18 +86,27 @@ function formatSubmission(
   return {
     id: submission.id,
     attemptNumber: submission.attemptNumber,
+    gradingStatus: submission.gradingStatus,
+    aiSummary: submission.aiSummary,
     overallScore: submission.overallScore,
     maxScore: submission.maxScore,
     summary: submission.summary,
+    aiGradingResult: submission.aiGradingResult ? parseGradingResult(submission.aiGradingResult) : null,
     gradingResult: parseGradingResult(submission.gradingResult),
+    reviewedAt: submission.reviewedAt,
     createdAt: submission.createdAt,
     student: submission.student || undefined,
-    answers: submission.answers?.map((answer) =>
-      formatSubmissionAnswer({
-        ...answer,
-        question: answer.question
-      })
-    ) || []
+    answers:
+      submission.answers?.map((answer) => ({
+        ...formatSubmissionAnswer({
+          ...answer,
+          question: answer.question
+        }),
+        aiScore: answer.aiScore,
+        aiFeedback: answer.aiFeedback,
+        teacherScore: answer.teacherScore,
+        teacherFeedback: answer.teacherFeedback
+      })) || []
   };
 }
 
@@ -121,6 +138,7 @@ export async function GET(req: NextRequest) {
     if (assignment.class.teacherId !== auth.user.id) {
       return NextResponse.json({ error: "无权查看该作业提交。" }, { status: 403 });
     }
+
     const submissions = await prisma.submission.findMany({
       where: { assignmentId },
       include: {
@@ -249,33 +267,44 @@ export async function POST(req: NextRequest) {
   const formattedQuestions = assignment.questions.map((question) => formatQuestion(question));
   const gradingResult = await gradeHomework({
     assignmentTitle: assignment.title,
+    assignmentDescription: assignment.description,
     questions: formattedQuestions,
     answers: enrichedAnswers
   });
   const serializedGradingResult = serializeGradingResult(gradingResult);
-  const checkMap = new Map(gradingResult.checks.map((item) => [item.item, item]));
+  const checkMap = new Map(
+    gradingResult.checks.map((item) => [item.questionId || item.item, item])
+  );
 
   const submission = await prisma.submission.create({
     data: {
       assignmentId,
       studentId: auth.user.id,
       attemptNumber: previousAttempts + 1,
+      gradingStatus: "AI_GRADED",
+      aiSummary: gradingResult.summary,
       overallScore: gradingResult.overallScore,
       maxScore: gradingResult.maxScore,
       summary: gradingResult.summary,
+      aiGradingResult: serializedGradingResult,
       gradingResult: serializedGradingResult,
       answers: {
         create: enrichedAnswers.map((answer) => {
           const question = questionMap.get(answer.questionId)!;
-          const detail = checkMap.get(question.title || `第${question.orderIndex}题`);
+          const detail =
+            checkMap.get(question.id) ||
+            checkMap.get(question.title || `第${question.orderIndex}题`);
+
           return {
             questionId: question.id,
             textAnswer: answer.textAnswer || null,
             selectedOption: answer.selectedOption || null,
             imagePath: answer.imagePath,
+            aiScore: detail?.score || 0,
+            aiFeedback: detail?.comment || "AI 已完成评分。",
             score: detail?.score || 0,
             maxScore: question.maxScore,
-            feedback: detail?.comment || "已提交。"
+            feedback: detail?.comment || "AI 已完成评分。"
           };
         })
       }

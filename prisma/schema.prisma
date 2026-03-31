@@ -60,19 +60,20 @@ model Assignment {
 }
 
 model AssignmentQuestion {
-  id              String             @id @default(cuid())
-  assignmentId    String
-  orderIndex      Int
-  title           String
-  prompt          String
-  promptImagePath String?
-  type            String
-  options         String?
-  referenceAnswer String?
+  id                 String             @id @default(cuid())
+  assignmentId       String
+  orderIndex         Int
+  title              String
+  prompt             String
+  promptImagePath    String?
+  type               String
+  options            String?
+  referenceAnswer    String?
   referenceImagePath String?
-  maxScore        Int
-  assignment      Assignment         @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
-  answers         SubmissionAnswer[]
+  gradingRubric      String?
+  maxScore           Int
+  assignment         Assignment         @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
+  answers            SubmissionAnswer[]
 
   @@unique([assignmentId, orderIndex])
 }
@@ -102,6 +103,7 @@ model AssignmentTemplateQuestion {
   options            String?
   referenceAnswer    String?
   referenceImagePath String?
+  gradingRubric      String?
   maxScore           Int
   template           AssignmentTemplate  @relation(fields: [templateId], references: [id], onDelete: Cascade)
 
@@ -113,10 +115,14 @@ model Submission {
   assignmentId  String
   studentId     String
   attemptNumber Int                @default(1)
+  gradingStatus String             @default("AI_GRADED")
+  aiSummary     String?
   overallScore  Int                @default(0)
   maxScore      Int                @default(100)
   summary       String             @default("")
+  aiGradingResult String?
   gradingResult String
+  reviewedAt    DateTime?
   createdAt     DateTime           @default(now())
   assignment    Assignment         @relation(fields: [assignmentId], references: [id], onDelete: Cascade)
   student       User               @relation(fields: [studentId], references: [id], onDelete: Cascade)
@@ -132,6 +138,10 @@ model SubmissionAnswer {
   textAnswer     String?
   selectedOption String?
   imagePath      String?
+  aiScore        Int?
+  aiFeedback     String?
+  teacherScore   Int?
+  teacherFeedback String?
   score          Int
   maxScore       Int
   feedback       String

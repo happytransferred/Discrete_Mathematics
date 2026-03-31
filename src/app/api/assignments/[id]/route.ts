@@ -4,10 +4,7 @@ import { requireAuth } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { Role } from "@/lib/roles";
 
-export async function GET(
-  req: NextRequest,
-  context: { params: { id: string } }
-) {
+export async function GET(req: NextRequest, context: { params: { id: string } }) {
   const auth = await requireAuth(req);
   if ("error" in auth) {
     return NextResponse.json({ error: auth.error }, { status: auth.status });
@@ -26,6 +23,7 @@ export async function GET(
       }
     }
   });
+
   if (!assignment) {
     return NextResponse.json({ error: "作业不存在。" }, { status: 404 });
   }

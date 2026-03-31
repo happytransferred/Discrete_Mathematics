@@ -49,9 +49,7 @@ async function normalizeQuestions(
   );
 }
 
-function serializeTemplate(
-  template: AssignmentTemplate & { questions: AssignmentTemplateQuestion[] }
-) {
+function serializeTemplate(template: AssignmentTemplate & { questions: AssignmentTemplateQuestion[] }) {
   return {
     id: template.id,
     title: template.title,

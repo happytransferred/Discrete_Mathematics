@@ -22,7 +22,8 @@ export function mapQuestionInput(question: AssignmentQuestionInput, index: numbe
     maxScore: Number(question.maxScore) || 0,
     options: serializeQuestionOptions(question.options),
     referenceAnswer: question.referenceAnswer?.trim() || null,
-    referenceImagePath: question.referenceImagePath || null
+    referenceImagePath: question.referenceImagePath || null,
+    gradingRubric: question.gradingRubric?.trim() || null
   };
 }
 
@@ -30,6 +31,7 @@ export function formatQuestion(
   question: (AssignmentQuestion | AssignmentTemplateQuestion) & {
     promptImagePath?: string | null;
     referenceImagePath?: string | null;
+    gradingRubric?: string | null;
   },
   includeReference = true
 ): AssignmentQuestionView {
@@ -43,7 +45,8 @@ export function formatQuestion(
     maxScore: question.maxScore,
     options: parseQuestionOptions(question.options),
     referenceAnswer: includeReference ? question.referenceAnswer : null,
-    referenceImagePath: includeReference ? question.referenceImagePath || null : null
+    referenceImagePath: includeReference ? question.referenceImagePath || null : null,
+    gradingRubric: includeReference ? question.gradingRubric || null : null
   };
 }
 

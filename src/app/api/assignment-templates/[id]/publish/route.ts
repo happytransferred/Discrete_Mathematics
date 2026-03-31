@@ -56,6 +56,7 @@ export async function POST(req: NextRequest, context: { params: { id: string } }
           options: question.options,
           referenceAnswer: question.referenceAnswer,
           referenceImagePath: question.referenceImagePath,
+          gradingRubric: question.gradingRubric,
           maxScore: question.maxScore
         }))
       }

@@ -6,6 +6,10 @@ function requireEnv(name: string) {
   return value;
 }
 
+function optionalEnv(name: string) {
+  return process.env[name] || null;
+}
+
 export function getJwtSecret() {
   return requireEnv("JWT_SECRET");
 }
@@ -24,4 +28,12 @@ export function getSupabaseServiceRoleKey() {
 
 export function getSupabaseStorageBucket() {
   return requireEnv("SUPABASE_STORAGE_BUCKET");
+}
+
+export function getOpenAiApiKey() {
+  return optionalEnv("OPENAI_API_KEY");
+}
+
+export function getOpenAiModel() {
+  return optionalEnv("OPENAI_MODEL") || "gpt-5.2";
 }

@@ -137,10 +137,18 @@ export async function POST(req: NextRequest) {
       let referenceImagePath = question.referenceImagePath || null;
 
       if (promptImageFile instanceof File && promptImageFile.size > 0) {
-        promptImagePath = await uploadTeacherImage(promptImageFile, auth.user.id, `assignment-prompt-${classId}-${index + 1}`);
+        promptImagePath = await uploadTeacherImage(
+          promptImageFile,
+          auth.user.id,
+          `assignment-prompt-${classId}-${index + 1}`
+        );
       }
       if (referenceImageFile instanceof File && referenceImageFile.size > 0) {
-        referenceImagePath = await uploadTeacherImage(referenceImageFile, auth.user.id, `assignment-reference-${classId}-${index + 1}`);
+        referenceImagePath = await uploadTeacherImage(
+          referenceImageFile,
+          auth.user.id,
+          `assignment-reference-${classId}-${index + 1}`
+        );
       }
 
       return {
