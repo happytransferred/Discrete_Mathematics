@@ -41,6 +41,7 @@ type Assignment = {
 };
 
 type DraftQuestion = {
+  clientKey: string;
   title: string;
   prompt: string;
   type: QuestionType;
@@ -62,6 +63,7 @@ const QUESTION_TYPE_OPTIONS: Array<{ value: QuestionType; label: string; helper:
 ];
 
 const emptyQuestion: DraftQuestion = {
+  clientKey: "",
   title: "",
   prompt: "",
   type: QUESTION_TYPES.TEXT,
@@ -72,6 +74,14 @@ const emptyQuestion: DraftQuestion = {
   promptImagePath: null,
   referenceImagePath: null
 };
+
+function createDraftQuestion(overrides?: Partial<DraftQuestion>): DraftQuestion {
+  return {
+    ...emptyQuestion,
+    clientKey: globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`,
+    ...overrides
+  };
+}
 
 function formatDateTime(dateString: string | null) {
   if (!dateString) {
@@ -120,7 +130,7 @@ export default function ClassDetailPage() {
   const [description, setDescription] = useState("");
   const [dueDate, setDueDate] = useState("");
   const [allowResubmission, setAllowResubmission] = useState(true);
-  const [questions, setQuestions] = useState<DraftQuestion[]>([{ ...emptyQuestion }]);
+  const [questions, setQuestions] = useState<DraftQuestion[]>([createDraftQuestion()]);
   const [promptImageFiles, setPromptImageFiles] = useState<Record<number, File | null>>({});
   const [referenceImageFiles, setReferenceImageFiles] = useState<Record<number, File | null>>({});
   const [templateDueDates, setTemplateDueDates] = useState<Record<string, string>>({});
@@ -198,7 +208,7 @@ export default function ClassDetailPage() {
     setDescription("");
     setDueDate("");
     setAllowResubmission(true);
-    setQuestions([{ ...emptyQuestion }]);
+    setQuestions([createDraftQuestion()]);
     setPromptImageFiles({});
     setReferenceImageFiles({});
   }
@@ -219,7 +229,7 @@ export default function ClassDetailPage() {
   }
 
   function addQuestion() {
-    setQuestions((current) => [...current, { ...emptyQuestion }]);
+    setQuestions((current) => [...current, createDraftQuestion()]);
   }
 
   function removeQuestion(index: number) {
@@ -348,6 +358,7 @@ export default function ClassDetailPage() {
     setQuestions(
       template.questions.length > 0
         ? template.questions.map((question) => ({
+            clientKey: globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`,
             title: question.title,
             prompt: question.prompt,
             type: question.type,
@@ -358,7 +369,7 @@ export default function ClassDetailPage() {
             promptImagePath: question.promptImagePath || null,
             referenceImagePath: question.referenceImagePath || null
           }))
-        : [{ ...emptyQuestion }]
+        : [createDraftQuestion()]
     );
     setPromptImageFiles({});
     setReferenceImageFiles({});
@@ -521,7 +532,7 @@ export default function ClassDetailPage() {
 
               <div className="space-y-5">
                 {questions.map((question, index) => (
-                  <article key={`${index}-${question.title}`} className="rounded-3xl border border-slate-200 p-5">
+                  <article key={question.clientKey} className="rounded-3xl border border-slate-200 p-5">
                     <div className="mb-4 flex items-center justify-between gap-4">
                       <h3 className="text-lg font-semibold">题目 {index + 1}</h3>
                       {questions.length > 1 ? (
