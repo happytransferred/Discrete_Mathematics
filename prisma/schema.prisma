@@ -137,6 +137,8 @@ model SubmissionAnswer {
   questionId     String
   textAnswer     String?
   selectedOption String?
+  selectedOptions String?
+  stepAnswerJson String?
   imagePath      String?
   aiScore        Int?
   aiFeedback     String?

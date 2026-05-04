@@ -3,7 +3,12 @@
 import Link from "next/link";
 import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
-import type { AssignmentQuestionView, StudentAnswerDraft } from "@/types/assignment";
+import {
+  QUESTION_TYPES,
+  type AssignmentQuestionView,
+  type StudentAnswerDraft,
+  type SubmissionAnswerView
+} from "@/types/assignment";
 import type { GradingResult } from "@/types/grading";
 
 type User = {
@@ -22,24 +27,6 @@ type Assignment = {
   allowResubmission: boolean;
   class: { id: string; name: string };
   questions: AssignmentQuestionView[];
-};
-
-type SubmissionAnswerView = {
-  id: string;
-  questionId: string;
-  questionTitle: string;
-  questionType: string;
-  prompt: string;
-  textAnswer?: string | null;
-  selectedOption?: string | null;
-  imagePath?: string | null;
-  aiScore?: number | null;
-  aiFeedback?: string | null;
-  teacherScore?: number | null;
-  teacherFeedback?: string | null;
-  score: number;
-  maxScore: number;
-  feedback: string;
 };
 
 type SubmissionView = {
@@ -70,6 +57,16 @@ function formatDateTime(dateString: string | null | undefined) {
   return new Date(dateString).toLocaleString("zh-CN");
 }
 
+function gradingStatusLabel(status: string) {
+  if (status === "TEACHER_REVIEWED") {
+    return "教师已复核";
+  }
+  if (status === "AI_GRADED") {
+    return "AI 已评分";
+  }
+  return status;
+}
+
 function buildInitialReview(submission: SubmissionView): ReviewState {
   return {
     summary: submission.summary,
@@ -83,14 +80,34 @@ function buildInitialReview(submission: SubmissionView): ReviewState {
   };
 }
 
-function gradingStatusLabel(status: string) {
-  if (status === "TEACHER_REVIEWED") {
-    return "教师已复核";
+function questionTypeLabel(type: string) {
+  switch (type) {
+    case QUESTION_TYPES.CHOICE:
+      return "单选题";
+    case QUESTION_TYPES.MULTIPLE_CHOICE:
+      return "多选题";
+    case QUESTION_TYPES.FILL_BLANK:
+      return "填空题";
+    case QUESTION_TYPES.TEXT:
+      return "简答题";
+    case QUESTION_TYPES.PROOF:
+      return "证明题";
+    case QUESTION_TYPES.IMAGE:
+      return "图片补充题";
+    default:
+      return type;
   }
-  if (status === "AI_GRADED") {
-    return "AI 已评分";
-  }
-  return status;
+}
+
+function buildEmptyDraft(question: AssignmentQuestionView): StudentAnswerDraft {
+  return {
+    questionId: question.id,
+    type: question.type,
+    textAnswer: "",
+    selectedOption: "",
+    selectedOptions: [],
+    stepAnswers: question.type === QUESTION_TYPES.PROOF ? [""] : []
+  };
 }
 
 export default function AssignmentPage() {
@@ -116,10 +133,7 @@ export default function AssignmentPage() {
     setError("");
 
     try {
-      const [meRes, assignmentRes] = await Promise.all([
-        fetch("/api/auth/me"),
-        fetch(`/api/assignments/${assignmentId}`)
-      ]);
+      const [meRes, assignmentRes] = await Promise.all([fetch("/api/auth/me"), fetch(`/api/assignments/${assignmentId}`)]);
 
       if (!meRes.ok) {
         router.replace("/login");
@@ -147,7 +161,7 @@ export default function AssignmentPage() {
         const nextSubmissions = (submissionsData.submissions || []) as SubmissionView[];
         setSubmissions(nextSubmissions);
         setReviewDrafts(
-          nextSubmissions.reduce((acc: Record<string, ReviewState>, item: SubmissionView) => {
+          nextSubmissions.reduce<Record<string, ReviewState>>((acc, item) => {
             acc[item.id] = buildInitialReview(item);
             return acc;
           }, {})
@@ -170,6 +184,22 @@ export default function AssignmentPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [assignmentId]);
 
+  useEffect(() => {
+    if (!assignment || user?.role !== "STUDENT") {
+      return;
+    }
+
+    setDraftAnswers((current) => {
+      const next = { ...current };
+      for (const question of assignment.questions) {
+        if (!next[question.id]) {
+          next[question.id] = buildEmptyDraft(question);
+        }
+      }
+      return next;
+    });
+  }, [assignment, user?.role]);
+
   const isExpired = useMemo(() => {
     if (!assignment?.dueDate) {
       return false;
@@ -177,26 +207,17 @@ export default function AssignmentPage() {
     return new Date(assignment.dueDate).getTime() < Date.now();
   }, [assignment?.dueDate]);
 
-  function updateTextAnswer(questionId: string, textAnswer: string) {
-    setDraftAnswers((current) => ({
-      ...current,
-      [questionId]: {
-        questionId,
-        type: assignment?.questions.find((item) => item.id === questionId)?.type || "TEXT",
-        textAnswer
-      }
-    }));
-  }
-
-  function updateChoiceAnswer(questionId: string, selectedOption: string) {
-    setDraftAnswers((current) => ({
-      ...current,
-      [questionId]: {
-        questionId,
-        type: assignment?.questions.find((item) => item.id === questionId)?.type || "CHOICE",
-        selectedOption
-      }
-    }));
+  function updateDraft(questionId: string, patch: Partial<StudentAnswerDraft>) {
+    setDraftAnswers((current) => {
+      const base = current[questionId] || buildEmptyDraft(assignment!.questions.find((item) => item.id === questionId)!);
+      return {
+        ...current,
+        [questionId]: {
+          ...base,
+          ...patch
+        }
+      };
+    });
   }
 
   function updateFile(questionId: string, e: ChangeEvent<HTMLInputElement>) {
@@ -204,6 +225,34 @@ export default function AssignmentPage() {
       ...current,
       [questionId]: e.target.files?.[0] || null
     }));
+  }
+
+  function toggleMultipleChoice(questionId: string, option: string, checked: boolean) {
+    const existing = draftAnswers[questionId]?.selectedOptions || [];
+    const next = checked ? [...new Set([...existing, option])] : existing.filter((item) => item !== option);
+    updateDraft(questionId, { selectedOptions: next });
+  }
+
+  function updateProofStep(questionId: string, index: number, value: string) {
+    const existing = [...(draftAnswers[questionId]?.stepAnswers || [""])];
+    existing[index] = value;
+    updateDraft(questionId, { stepAnswers: existing });
+  }
+
+  function addProofStep(questionId: string) {
+    const existing = [...(draftAnswers[questionId]?.stepAnswers || [""])];
+    existing.push("");
+    updateDraft(questionId, { stepAnswers: existing });
+  }
+
+  function removeProofStep(questionId: string, index: number) {
+    const existing = [...(draftAnswers[questionId]?.stepAnswers || [""])];
+    if (existing.length === 1) {
+      existing[0] = "";
+    } else {
+      existing.splice(index, 1);
+    }
+    updateDraft(questionId, { stepAnswers: existing });
   }
 
   async function uploadSubmission(e: FormEvent) {
@@ -231,10 +280,12 @@ export default function AssignmentPage() {
         body: formData
       });
       const data = await res.json();
+
       if (!res.ok) {
         setError(data.error || "提交失败，请稍后再试。");
         return;
       }
+
       setLatestSubmission(data.submission);
       setSubmissionHistory((current) => [data.submission, ...current]);
       setDraftFiles({});
@@ -256,12 +307,7 @@ export default function AssignmentPage() {
     }));
   }
 
-  function updateReviewAnswer(
-    submissionId: string,
-    answerId: string,
-    field: "score" | "feedback",
-    value: string
-  ) {
+  function updateReviewAnswer(submissionId: string, answerId: string, field: "score" | "feedback", value: string) {
     setReviewDrafts((current) => {
       const base = current[submissionId] || { summary: "", answers: {} };
       const existing = base.answers[answerId] || { score: 0, feedback: "" };
@@ -315,13 +361,154 @@ export default function AssignmentPage() {
     }
   }
 
+  function renderStudentInput(question: AssignmentQuestionView) {
+    const draft = draftAnswers[question.id] || buildEmptyDraft(question);
+
+    switch (question.type) {
+      case QUESTION_TYPES.CHOICE:
+        return (
+          <div className="space-y-2">
+            {question.options.map((option) => (
+              <label key={option} className="flex items-center gap-2 text-sm text-slate-700">
+                <input
+                  type="radio"
+                  name={`choice-${question.id}`}
+                  checked={draft.selectedOption === option}
+                  onChange={() => updateDraft(question.id, { selectedOption: option })}
+                />
+                <span>{option}</span>
+              </label>
+            ))}
+          </div>
+        );
+      case QUESTION_TYPES.MULTIPLE_CHOICE:
+        return (
+          <div className="space-y-2">
+            {question.options.map((option) => (
+              <label key={option} className="flex items-center gap-2 text-sm text-slate-700">
+                <input
+                  type="checkbox"
+                  checked={(draft.selectedOptions || []).includes(option)}
+                  onChange={(e) => toggleMultipleChoice(question.id, option, e.target.checked)}
+                />
+                <span>{option}</span>
+              </label>
+            ))}
+          </div>
+        );
+      case QUESTION_TYPES.FILL_BLANK:
+        return (
+          <input
+            className="w-full rounded-2xl border border-slate-200 px-4 py-3"
+            value={draft.textAnswer || ""}
+            onChange={(e) => updateDraft(question.id, { textAnswer: e.target.value })}
+            placeholder="请输入答案"
+          />
+        );
+      case QUESTION_TYPES.PROOF:
+        return (
+          <div className="space-y-3">
+            {(draft.stepAnswers || [""]).map((step, index) => (
+              <div key={`${question.id}-${index}`} className="rounded-2xl border border-slate-200 p-3">
+                <div className="mb-2 flex items-center justify-between gap-3">
+                  <span className="text-sm font-medium text-slate-700">步骤 {index + 1}</span>
+                  <button
+                    type="button"
+                    onClick={() => removeProofStep(question.id, index)}
+                    className="text-xs text-red-600"
+                  >
+                    删除步骤
+                  </button>
+                </div>
+                <textarea
+                  className="min-h-[100px] w-full rounded-2xl border border-slate-200 px-4 py-3"
+                  value={step}
+                  onChange={(e) => updateProofStep(question.id, index, e.target.value)}
+                  placeholder="请输入这一证明步骤。"
+                />
+              </div>
+            ))}
+            <button
+              type="button"
+              onClick={() => addProofStep(question.id)}
+              className="rounded-full border border-slate-300 px-4 py-2 text-sm text-slate-700"
+            >
+              新增步骤
+            </button>
+          </div>
+        );
+      case QUESTION_TYPES.IMAGE:
+        return (
+          <div className="space-y-3">
+            <input type="file" accept="image/*" onChange={(e) => updateFile(question.id, e)} />
+            <textarea
+              className="min-h-[100px] w-full rounded-2xl border border-slate-200 px-4 py-3"
+              value={draft.textAnswer || ""}
+              onChange={(e) => updateDraft(question.id, { textAnswer: e.target.value })}
+              placeholder="可选：补充文字说明，帮助教师理解你的图片答案。"
+            />
+          </div>
+        );
+      case QUESTION_TYPES.TEXT:
+      default:
+        return (
+          <textarea
+            className="min-h-[120px] w-full rounded-2xl border border-slate-200 px-4 py-3"
+            value={draft.textAnswer || ""}
+            onChange={(e) => updateDraft(question.id, { textAnswer: e.target.value })}
+            placeholder="请输入文本答案"
+          />
+        );
+    }
+  }
+
+  function renderAnswerContent(answer: SubmissionAnswerView) {
+    switch (answer.questionType) {
+      case QUESTION_TYPES.CHOICE:
+        return <p className="text-sm text-slate-700">学生选择：{answer.selectedOption || "未作答"}</p>;
+      case QUESTION_TYPES.MULTIPLE_CHOICE:
+        return <p className="text-sm text-slate-700">学生选择：{answer.selectedOptions?.join("、") || "未作答"}</p>;
+      case QUESTION_TYPES.FILL_BLANK:
+      case QUESTION_TYPES.TEXT:
+        return <p className="whitespace-pre-wrap text-sm text-slate-700">{answer.textAnswer || "未作答"}</p>;
+      case QUESTION_TYPES.PROOF:
+        return (
+          <div className="space-y-2">
+            {(answer.stepAnswers || []).length > 0 ? (
+              answer.stepAnswers?.map((item, index) => (
+                <div key={`${answer.id}-${index}`} className="rounded-2xl bg-slate-50 px-3 py-2 text-sm text-slate-700">
+                  <span className="font-medium">步骤 {index + 1}：</span>
+                  {item}
+                </div>
+              ))
+            ) : (
+              <p className="text-sm text-slate-500">未填写证明步骤。</p>
+            )}
+          </div>
+        );
+      case QUESTION_TYPES.IMAGE:
+        return (
+          <div className="space-y-3">
+            {answer.textAnswer ? <p className="whitespace-pre-wrap text-sm text-slate-700">{answer.textAnswer}</p> : null}
+            {answer.imagePath ? (
+              <img src={answer.imagePath} alt={`${answer.questionTitle} 学生作答图片`} className="max-h-72 rounded-2xl border border-slate-200" />
+            ) : (
+              <p className="text-sm text-slate-500">未上传图片。</p>
+            )}
+          </div>
+        );
+      default:
+        return null;
+    }
+  }
+
   if (loading) {
     return <main className="portal-shell p-6">正在加载作业详情...</main>;
   }
 
   return (
     <main className="portal-shell space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-semibold">{assignment?.title}</h1>
           <p className="text-sm text-slate-600">
@@ -329,51 +516,53 @@ export default function AssignmentPage() {
             {assignment?.dueDate ? ` ${formatDateTime(assignment.dueDate)}` : " 未设置"}
           </p>
         </div>
-        <Link href={assignment ? `/classes/${assignment.classId}` : "/dashboard"} className="text-blue-600">
+        <Link href={assignment ? `/classes/${assignment.classId}` : "/dashboard"} className="text-sm font-medium text-blue-600">
           返回班级
         </Link>
       </div>
 
       {assignment?.description ? (
-        <section className="portal-card p-4">
-          <h2 className="mb-2 font-semibold">作业说明</h2>
-          <p className="whitespace-pre-wrap text-sm">{assignment.description}</p>
+        <section className="portal-card p-5">
+          <h2 className="mb-2 text-lg font-semibold">作业说明</h2>
+          <p className="whitespace-pre-wrap text-sm text-slate-700">{assignment.description}</p>
         </section>
       ) : null}
 
+      {error ? <p className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-600">{error}</p> : null}
+
       {assignment ? (
-        <section className="portal-card p-4">
-          <h2 className="mb-3 font-semibold">题目结构</h2>
+        <section className="portal-card p-5">
+          <h2 className="mb-4 text-lg font-semibold">题目结构</h2>
           <div className="space-y-4">
-            {assignment.questions.map((question) => (
-              <article key={question.id} className="rounded-2xl border border-slate-200 p-4">
-                <div className="flex items-center justify-between gap-3">
-                  <h3 className="font-medium text-slate-900">{question.title}</h3>
+            {assignment.questions.map((question, index) => (
+              <article key={question.id} className="rounded-3xl border border-slate-200 p-5">
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <h3 className="text-lg font-semibold">
+                    第 {index + 1} 题：{question.title}
+                  </h3>
                   <span className="text-sm text-slate-500">
-                    {question.type} | {question.maxScore} 分
+                    {questionTypeLabel(question.type)} | {question.maxScore} 分
                   </span>
                 </div>
-                <p className="mt-2 text-sm leading-6 text-slate-600">{question.prompt}</p>
+                <p className="mt-3 whitespace-pre-wrap text-sm leading-6 text-slate-700">{question.prompt}</p>
                 {question.promptImagePath ? (
-                  <img
-                    src={question.promptImagePath}
-                    alt={`${question.title}题面图片`}
-                    className="mt-3 max-h-64 rounded border"
-                  />
+                  <img src={question.promptImagePath} alt={`${question.title} 题面图片`} className="mt-4 max-h-72 rounded-2xl border border-slate-200" />
                 ) : null}
                 {user?.role === "TEACHER" && question.gradingRubric ? (
-                  <p className="mt-3 text-sm text-slate-700">评分 rubric：{question.gradingRubric}</p>
+                  <p className="mt-4 rounded-2xl bg-slate-50 px-4 py-3 text-sm text-slate-700">
+                    评分 rubric：{question.gradingRubric}
+                  </p>
                 ) : null}
                 {user?.role === "TEACHER" && (question.referenceAnswer || question.referenceImagePath) ? (
-                  <div className="mt-3 rounded-xl bg-slate-50 p-3">
+                  <div className="mt-4 rounded-2xl bg-slate-50 p-4">
                     {question.referenceAnswer ? (
-                      <p className="text-sm text-slate-700">参考答案：{question.referenceAnswer}</p>
+                      <p className="whitespace-pre-wrap text-sm text-slate-700">参考答案：{question.referenceAnswer}</p>
                     ) : null}
                     {question.referenceImagePath ? (
                       <img
                         src={question.referenceImagePath}
-                        alt={`${question.title}参考答案图片`}
-                        className="mt-3 max-h-64 rounded border"
+                        alt={`${question.title} 参考答案图片`}
+                        className="mt-4 max-h-72 rounded-2xl border border-slate-200"
                       />
                     ) : null}
                   </div>
@@ -384,203 +573,194 @@ export default function AssignmentPage() {
         </section>
       ) : null}
 
-      {error ? <p className="text-sm text-red-600">{error}</p> : null}
-
       {user?.role === "STUDENT" && assignment ? (
         <>
-          <section className="portal-card p-5">
+          <section className="portal-card p-6">
             <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
-              <h2 className="text-xl font-semibold">作答与提交</h2>
-              <div className="text-sm text-slate-600">
-                {isExpired ? "状态：已截止" : `状态：${assignment.allowResubmission ? "允许重复提交" : "仅允许提交一次"}`}
+              <div>
+                <h2 className="text-xl font-semibold">在线作答</h2>
+                <p className="mt-1 text-sm text-slate-600">
+                  当前状态：{isExpired ? "已截止" : assignment.allowResubmission ? "允许重复提交" : "仅允许提交一次"}
+                </p>
               </div>
             </div>
 
-            <form onSubmit={uploadSubmission} className="space-y-4">
+            <form onSubmit={uploadSubmission} className="space-y-5">
               {assignment.questions.map((question, index) => (
-                <article key={question.id} className="rounded-2xl border border-slate-200 p-4">
-                  <div className="mb-2 flex items-center justify-between gap-3">
-                    <h3 className="font-medium text-slate-900">
+                <article key={question.id} className="rounded-3xl border border-slate-200 p-5">
+                  <div className="mb-3 flex items-center justify-between gap-3">
+                    <h3 className="text-lg font-semibold">
                       第 {index + 1} 题：{question.title}
                     </h3>
                     <span className="text-sm text-slate-500">{question.maxScore} 分</span>
                   </div>
-
-                  {question.type === "TEXT" ? (
-                    <textarea
-                      className="w-full rounded-md border border-slate-300 px-3 py-2"
-                      placeholder="请输入文本答案"
-                      value={draftAnswers[question.id]?.textAnswer || ""}
-                      onChange={(e) => updateTextAnswer(question.id, e.target.value)}
-                    />
+                  <p className="mb-4 whitespace-pre-wrap text-sm text-slate-700">{question.prompt}</p>
+                  {question.promptImagePath ? (
+                    <img src={question.promptImagePath} alt={`${question.title} 题面图片`} className="mb-4 max-h-72 rounded-2xl border border-slate-200" />
                   ) : null}
-
-                  {question.type === "CHOICE" ? (
-                    <div className="space-y-2">
-                      {question.options.map((option) => (
-                        <label key={option} className="flex items-center gap-2 text-sm text-slate-700">
-                          <input
-                            type="radio"
-                            name={`choice-${question.id}`}
-                            value={option}
-                            checked={draftAnswers[question.id]?.selectedOption === option}
-                            onChange={(e) => updateChoiceAnswer(question.id, e.target.value)}
-                          />
-                          {option}
-                        </label>
-                      ))}
-                    </div>
-                  ) : null}
-
-                  {question.type === "IMAGE" ? (
-                    <input type="file" accept="image/*" onChange={(e) => updateFile(question.id, e)} />
-                  ) : null}
+                  {renderStudentInput(question)}
                 </article>
               ))}
 
-              <button type="submit" className="portal-button-primary" disabled={pending || isExpired}>
-                {pending ? "提交中..." : latestSubmission ? "再次提交并生成新记录" : "提交作业"}
+              <button
+                type="submit"
+                disabled={pending || isExpired}
+                className="rounded-full bg-emerald-700 px-6 py-3 text-sm font-medium text-white disabled:opacity-60"
+              >
+                {pending ? "提交中..." : "提交在线作答"}
               </button>
             </form>
           </section>
 
-          {latestSubmission ? (
-            <section className="portal-card p-5">
-              <h2 className="mb-3 text-xl font-semibold">最近一次成绩详情</h2>
-              <p className="text-sm text-slate-600">
-                第 {latestSubmission.attemptNumber} 次提交 | 状态：{gradingStatusLabel(latestSubmission.gradingStatus)} | 得分{" "}
-                {latestSubmission.overallScore}/{latestSubmission.maxScore}
-              </p>
-              <p className="mt-2 text-sm text-slate-700">{latestSubmission.summary}</p>
-              <div className="mt-4 space-y-3">
-                {latestSubmission.answers.map((answer) => (
-                  <article key={answer.id} className="rounded-2xl border border-slate-200 p-4">
-                    <p className="font-medium text-slate-900">{answer.questionTitle}</p>
-                    <p className="mt-1 text-sm text-slate-600">{answer.prompt}</p>
-                    <p className="mt-2 text-sm text-slate-700">
-                      最终得分：{answer.score}/{answer.maxScore}
-                    </p>
-                    {answer.aiScore !== null && answer.aiScore !== undefined ? (
-                      <p className="mt-1 text-sm text-slate-500">AI 建议分：{answer.aiScore}</p>
-                    ) : null}
-                    {answer.textAnswer ? <p className="mt-2 text-sm text-slate-700">文本答案：{answer.textAnswer}</p> : null}
-                    {answer.selectedOption ? <p className="mt-2 text-sm text-slate-700">选择答案：{answer.selectedOption}</p> : null}
-                    {answer.imagePath ? (
-                      <img src={answer.imagePath} alt="submission" className="mt-3 max-h-56 rounded border" />
-                    ) : null}
-                    <p className="mt-2 text-sm text-slate-600">评语：{answer.feedback}</p>
-                  </article>
-                ))}
-              </div>
-            </section>
-          ) : null}
-
-          <section className="portal-card p-5">
-            <h2 className="mb-3 text-xl font-semibold">历史提交记录</h2>
-            <div className="space-y-3">
-              {submissionHistory.length === 0 ? <p className="text-sm text-slate-500">暂无提交记录。</p> : null}
-              {submissionHistory.map((item) => (
-                <article key={item.id} className="rounded-2xl border border-slate-200 p-4">
-                  <p className="font-medium text-slate-900">
-                    第 {item.attemptNumber} 次提交 | 状态：{gradingStatusLabel(item.gradingStatus)} | 得分 {item.overallScore}/
-                    {item.maxScore}
-                  </p>
-                  <p className="mt-1 text-sm text-slate-600">提交时间：{formatDateTime(item.createdAt)}</p>
-                  <p className="mt-2 text-sm text-slate-700">{item.summary}</p>
-                </article>
-              ))}
+          <section className="portal-card p-6">
+            <div className="mb-4">
+              <h2 className="text-xl font-semibold">成绩详情</h2>
+              <p className="mt-1 text-sm text-slate-600">这里会显示 AI 评分、教师复核状态和历史提交记录。</p>
             </div>
+
+            {latestSubmission ? (
+              <div className="space-y-4">
+                <article className="rounded-3xl border border-slate-200 p-5">
+                  <div className="flex flex-wrap items-center justify-between gap-3">
+                    <div>
+                      <h3 className="text-lg font-semibold">最近一次提交</h3>
+                      <p className="mt-1 text-sm text-slate-600">
+                        第 {latestSubmission.attemptNumber} 次提交 | 提交时间：{formatDateTime(latestSubmission.createdAt)}
+                      </p>
+                    </div>
+                    <div className="text-right">
+                      <p className="text-2xl font-semibold">{latestSubmission.overallScore}/{latestSubmission.maxScore}</p>
+                      <p className="text-sm text-slate-500">{gradingStatusLabel(latestSubmission.gradingStatus)}</p>
+                    </div>
+                  </div>
+                  <p className="mt-4 whitespace-pre-wrap text-sm text-slate-700">{latestSubmission.summary}</p>
+                  <div className="mt-4 space-y-4">
+                    {latestSubmission.answers.map((answer) => (
+                      <article key={answer.id} className="rounded-2xl bg-slate-50 p-4">
+                        <div className="flex items-center justify-between gap-3">
+                          <p className="font-medium text-slate-900">{answer.questionTitle}</p>
+                          <span className="text-sm text-slate-500">{answer.score}/{answer.maxScore}</span>
+                        </div>
+                        <div className="mt-3">{renderAnswerContent(answer)}</div>
+                        <div className="mt-3 rounded-2xl bg-white px-4 py-3 text-sm text-slate-700">
+                          <p>AI 建议：{answer.aiFeedback || "暂无"}</p>
+                          {answer.teacherFeedback ? <p className="mt-2">教师反馈：{answer.teacherFeedback}</p> : null}
+                        </div>
+                      </article>
+                    ))}
+                  </div>
+                </article>
+
+                {submissionHistory.length > 1 ? (
+                  <article className="rounded-3xl border border-slate-200 p-5">
+                    <h3 className="text-lg font-semibold">历史提交</h3>
+                    <div className="mt-4 space-y-3">
+                      {submissionHistory.slice(1).map((submission) => (
+                        <div key={submission.id} className="rounded-2xl bg-slate-50 px-4 py-3 text-sm text-slate-700">
+                          第 {submission.attemptNumber} 次 | {submission.overallScore}/{submission.maxScore} 分 |{" "}
+                          {formatDateTime(submission.createdAt)}
+                        </div>
+                      ))}
+                    </div>
+                  </article>
+                ) : null}
+              </div>
+            ) : (
+              <p className="text-sm text-slate-500">你还没有提交这份作业。</p>
+            )}
           </section>
         </>
       ) : null}
 
       {user?.role === "TEACHER" ? (
-        <section className="portal-card p-5">
-          <h2 className="mb-3 text-xl font-semibold">教师批改台</h2>
-          <div className="space-y-4">
-            {submissions.length === 0 ? <p className="text-sm text-slate-500">暂时还没有学生提交。</p> : null}
-            {submissions.map((item) => {
-              const reviewDraft = reviewDrafts[item.id] || buildInitialReview(item);
-              return (
-                <article key={item.id} className="rounded-2xl border border-slate-200 p-4">
-                  <div className="flex flex-wrap items-center justify-between gap-3">
-                    <div>
-                      <p className="font-medium text-slate-900">
-                        {item.student?.name}（{item.student?.email}）
-                      </p>
-                      <p className="text-sm text-slate-600">
-                        第 {item.attemptNumber} 次提交 | 状态：{gradingStatusLabel(item.gradingStatus)} | 当前得分{" "}
-                        {item.overallScore}/{item.maxScore}
-                      </p>
-                    </div>
-                    <span className="text-sm text-slate-500">{formatDateTime(item.createdAt)}</span>
-                  </div>
-
-                  {item.aiSummary ? (
-                    <div className="mt-4 rounded-xl bg-sky-50 p-4 text-sm text-slate-700">
-                      <p className="font-medium text-slate-900">AI 评分摘要</p>
-                      <p className="mt-2">{item.aiSummary}</p>
-                    </div>
-                  ) : null}
-
-                  <div className="mt-4 space-y-3">
-                    {item.answers.map((answer) => (
-                      <div key={answer.id} className="rounded-xl bg-slate-50 p-4">
-                        <p className="font-medium text-slate-900">{answer.questionTitle}</p>
-                        <p className="mt-1 text-sm text-slate-600">{answer.prompt}</p>
-                        {answer.textAnswer ? <p className="mt-2 text-sm text-slate-700">文本答案：{answer.textAnswer}</p> : null}
-                        {answer.selectedOption ? <p className="mt-2 text-sm text-slate-700">选择答案：{answer.selectedOption}</p> : null}
-                        {answer.imagePath ? (
-                          <img src={answer.imagePath} alt="submission" className="mt-3 max-h-56 rounded border" />
-                        ) : null}
-
-                        {answer.aiScore !== null && answer.aiScore !== undefined ? (
-                          <p className="mt-2 text-sm text-slate-500">AI 建议分：{answer.aiScore}</p>
-                        ) : null}
-                        {answer.aiFeedback ? (
-                          <p className="mt-1 text-sm text-slate-500">AI 评语：{answer.aiFeedback}</p>
-                        ) : null}
-
-                        <div className="mt-3 grid gap-3 md:grid-cols-[120px_1fr]">
-                          <input
-                            type="number"
-                            min={0}
-                            max={answer.maxScore}
-                            value={reviewDraft.answers[answer.id]?.score ?? answer.score}
-                            onChange={(e) => updateReviewAnswer(item.id, answer.id, "score", e.target.value)}
-                          />
-                          <textarea
-                            className="rounded-md border border-slate-300 px-3 py-2"
-                            value={reviewDraft.answers[answer.id]?.feedback ?? answer.feedback}
-                            onChange={(e) => updateReviewAnswer(item.id, answer.id, "feedback", e.target.value)}
-                          />
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-
-                  <div className="mt-4 space-y-3">
-                    <label className="block text-sm text-slate-700">
-                      <span className="mb-2 block">教师总评</span>
-                      <textarea
-                        className="w-full rounded-md border border-slate-300 px-3 py-2"
-                        value={reviewDraft.summary}
-                        onChange={(e) => updateReviewSummary(item.id, e.target.value)}
-                      />
-                    </label>
-                    <button
-                      type="button"
-                      className="portal-button-primary"
-                      disabled={reviewingId === item.id}
-                      onClick={() => saveReview(item.id)}
-                    >
-                      {reviewingId === item.id ? "保存中..." : "保存教师评分"}
-                    </button>
-                  </div>
-                </article>
-              );
-            })}
+        <section className="portal-card p-6">
+          <div className="mb-4">
+            <h2 className="text-xl font-semibold">教师批改台</h2>
+            <p className="mt-1 text-sm text-slate-600">按题查看学生结构化答案，结合 AI 建议分完成最终复核。</p>
           </div>
+
+          {submissions.length === 0 ? (
+            <p className="text-sm text-slate-500">当前还没有学生提交。</p>
+          ) : (
+            <div className="space-y-6">
+              {submissions.map((submission) => {
+                const reviewDraft = reviewDrafts[submission.id] || buildInitialReview(submission);
+                return (
+                  <article key={submission.id} className="rounded-3xl border border-slate-200 p-5">
+                    <div className="flex flex-wrap items-center justify-between gap-4">
+                      <div>
+                        <h3 className="text-lg font-semibold">
+                          {submission.student?.name || "匿名学生"} | 第 {submission.attemptNumber} 次提交
+                        </h3>
+                        <p className="mt-1 text-sm text-slate-600">
+                          提交时间：{formatDateTime(submission.createdAt)} | 当前状态：{gradingStatusLabel(submission.gradingStatus)}
+                        </p>
+                      </div>
+                      <div className="text-right">
+                        <p className="text-2xl font-semibold">{submission.overallScore}/{submission.maxScore}</p>
+                        {submission.reviewedAt ? (
+                          <p className="text-sm text-slate-500">复核时间：{formatDateTime(submission.reviewedAt)}</p>
+                        ) : null}
+                      </div>
+                    </div>
+
+                    <div className="mt-5 space-y-4">
+                      {submission.answers.map((answer) => (
+                        <article key={answer.id} className="rounded-2xl bg-slate-50 p-4">
+                          <div className="flex items-center justify-between gap-3">
+                            <div>
+                              <h4 className="font-medium text-slate-900">{answer.questionTitle}</h4>
+                              <p className="text-xs text-slate-500">{questionTypeLabel(answer.questionType)}</p>
+                            </div>
+                            <span className="text-sm text-slate-500">满分 {answer.maxScore}</span>
+                          </div>
+                          <div className="mt-3">{renderAnswerContent(answer)}</div>
+                          <div className="mt-4 rounded-2xl bg-white px-4 py-3 text-sm text-slate-700">
+                            <p>AI 建议分：{answer.aiScore ?? answer.score} / {answer.maxScore}</p>
+                            <p className="mt-2">AI 评语：{answer.aiFeedback || answer.feedback}</p>
+                          </div>
+
+                          <div className="mt-4 grid gap-4 md:grid-cols-[120px_1fr]">
+                            <input
+                              type="number"
+                              min={0}
+                              max={answer.maxScore}
+                              className="rounded-2xl border border-slate-200 px-4 py-3"
+                              value={reviewDraft.answers[answer.id]?.score ?? answer.score}
+                              onChange={(e) => updateReviewAnswer(submission.id, answer.id, "score", e.target.value)}
+                            />
+                            <textarea
+                              className="min-h-[90px] rounded-2xl border border-slate-200 px-4 py-3"
+                              value={reviewDraft.answers[answer.id]?.feedback ?? answer.feedback}
+                              onChange={(e) => updateReviewAnswer(submission.id, answer.id, "feedback", e.target.value)}
+                              placeholder="教师反馈"
+                            />
+                          </div>
+                        </article>
+                      ))}
+                    </div>
+
+                    <div className="mt-5 space-y-3">
+                      <textarea
+                        className="min-h-[110px] w-full rounded-2xl border border-slate-200 px-4 py-3"
+                        value={reviewDraft.summary}
+                        onChange={(e) => updateReviewSummary(submission.id, e.target.value)}
+                        placeholder="教师总评"
+                      />
+                      <button
+                        type="button"
+                        onClick={() => saveReview(submission.id)}
+                        disabled={reviewingId === submission.id}
+                        className="rounded-full bg-slate-900 px-5 py-3 text-sm font-medium text-white disabled:opacity-60"
+                      >
+                        {reviewingId === submission.id ? "保存中..." : "保存教师复核结果"}
+                      </button>
+                    </div>
+                  </article>
+                );
+              })}
+            </div>
+          )}
         </section>
       ) : null}
     </main>

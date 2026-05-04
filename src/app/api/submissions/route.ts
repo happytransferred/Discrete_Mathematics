@@ -4,13 +4,9 @@ import { requireAuth, requireRole } from "@/lib/auth";
 import { parseGradingResult, serializeGradingResult } from "@/lib/grading-result";
 import { prisma } from "@/lib/prisma";
 import { Role } from "@/lib/roles";
-import {
-  buildSubmissionObjectKey,
-  getStorageBucket,
-  getSupabaseAdmin
-} from "@/lib/supabase-server";
+import { buildSubmissionObjectKey, getStorageBucket, getSupabaseAdmin } from "@/lib/supabase-server";
 import { gradeHomework } from "@/services/grading-service";
-import type { AssignmentQuestionView, StudentAnswerDraft } from "@/types/assignment";
+import { QUESTION_TYPES, type AssignmentQuestionView, type StudentAnswerDraft } from "@/types/assignment";
 
 export const runtime = "nodejs";
 
@@ -20,6 +16,9 @@ function extFromMimeType(mimeType: string) {
   }
   if (mimeType === "image/webp") {
     return "webp";
+  }
+  if (mimeType === "image/gif") {
+    return "gif";
   }
   return "jpg";
 }
@@ -31,20 +30,43 @@ async function uploadSubmissionImage(file: File, userId: string, assignmentId: s
   const supabase = getSupabaseAdmin();
   const bucket = getStorageBucket();
 
-  const { error: uploadError } = await supabase.storage
-    .from(bucket)
-    .upload(objectKey, bytes, {
-      contentType: file.type,
-      cacheControl: "3600",
-      upsert: true
-    });
+  const { error } = await supabase.storage.from(bucket).upload(objectKey, bytes, {
+    contentType: file.type,
+    cacheControl: "3600",
+    upsert: true
+  });
 
-  if (uploadError) {
-    throw new Error(`Upload failed: ${uploadError.message}`);
+  if (error) {
+    throw new Error(`Upload failed: ${error.message}`);
   }
 
-  const { data } = supabase.storage.from(bucket).getPublicUrl(objectKey);
-  return data.publicUrl;
+  return supabase.storage.from(bucket).getPublicUrl(objectKey).data.publicUrl;
+}
+
+function parseDraftAnswers(value: string) {
+  try {
+    return JSON.parse(value) as StudentAnswerDraft[];
+  } catch {
+    return [];
+  }
+}
+
+function serializeStringArray(value: string[] | undefined) {
+  const normalized = (value || []).map((item) => item.trim()).filter(Boolean);
+  return normalized.length > 0 ? JSON.stringify(normalized) : null;
+}
+
+function normalizeTextForStorage(questionType: string, draft: StudentAnswerDraft | undefined) {
+  if (!draft) {
+    return null;
+  }
+
+  if (questionType === QUESTION_TYPES.PROOF) {
+    const steps = (draft.stepAnswers || []).map((item) => item.trim()).filter(Boolean);
+    return steps.length > 0 ? steps.join("\n") : null;
+  }
+
+  return draft.textAnswer?.trim() || null;
 }
 
 function formatSubmission(
@@ -66,6 +88,8 @@ function formatSubmission(
       questionId: string;
       textAnswer: string | null;
       selectedOption: string | null;
+      selectedOptions: string | null;
+      stepAnswerJson: string | null;
       imagePath: string | null;
       aiScore: number | null;
       aiFeedback: string | null;
@@ -98,10 +122,7 @@ function formatSubmission(
     student: submission.student || undefined,
     answers:
       submission.answers?.map((answer) => ({
-        ...formatSubmissionAnswer({
-          ...answer,
-          question: answer.question
-        }),
+        ...formatSubmissionAnswer(answer),
         aiScore: answer.aiScore,
         aiFeedback: answer.aiFeedback,
         teacherScore: answer.teacherScore,
@@ -130,13 +151,14 @@ export async function GET(req: NextRequest) {
       }
     }
   });
+
   if (!assignment) {
     return NextResponse.json({ error: "作业不存在。" }, { status: 404 });
   }
 
   if (auth.user.role === Role.TEACHER) {
     if (assignment.class.teacherId !== auth.user.id) {
-      return NextResponse.json({ error: "无权查看该作业提交。" }, { status: 403 });
+      return NextResponse.json({ error: "无权查看该作业的提交记录。" }, { status: 403 });
     }
 
     const submissions = await prisma.submission.findMany({
@@ -144,9 +166,7 @@ export async function GET(req: NextRequest) {
       include: {
         student: { select: { id: true, name: true, email: true } },
         answers: {
-          include: {
-            question: true
-          },
+          include: { question: true },
           orderBy: {
             question: { orderIndex: "asc" }
           }
@@ -168,16 +188,14 @@ export async function GET(req: NextRequest) {
     where: { classId: assignment.classId, studentId: auth.user.id }
   });
   if (!membership) {
-    return NextResponse.json({ error: "无权查看该作业提交。" }, { status: 403 });
+    return NextResponse.json({ error: "无权查看该作业的提交记录。" }, { status: 403 });
   }
 
   const submissions = await prisma.submission.findMany({
     where: { assignmentId, studentId: auth.user.id },
     include: {
       answers: {
-        include: {
-          question: true
-        },
+        include: { question: true },
         orderBy: {
           question: { orderIndex: "asc" }
         }
@@ -219,6 +237,7 @@ export async function POST(req: NextRequest) {
       }
     }
   });
+
   if (!assignment) {
     return NextResponse.json({ error: "作业不存在。" }, { status: 404 });
   }
@@ -241,7 +260,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "该作业不允许重复提交。" }, { status: 400 });
   }
 
-  const draftAnswers = JSON.parse(answersRaw) as StudentAnswerDraft[];
+  const draftAnswers = parseDraftAnswers(answersRaw);
   const questionMap = new Map(assignment.questions.map((question) => [question.id, question]));
 
   const enrichedAnswers = await Promise.all(
@@ -254,11 +273,17 @@ export async function POST(req: NextRequest) {
         imagePath = await uploadSubmissionImage(imageFile, auth.user.id, assignmentId, question.id);
       }
 
+      const selectedOptions =
+        question.type === QUESTION_TYPES.MULTIPLE_CHOICE ? draft?.selectedOptions || [] : [];
+      const stepAnswers = question.type === QUESTION_TYPES.PROOF ? draft?.stepAnswers || [] : [];
+
       return {
         questionId: question.id,
         type: question.type as AssignmentQuestionView["type"],
         textAnswer: draft?.textAnswer || "",
         selectedOption: draft?.selectedOption || "",
+        selectedOptions,
+        stepAnswers,
         imagePath
       };
     })
@@ -272,9 +297,7 @@ export async function POST(req: NextRequest) {
     answers: enrichedAnswers
   });
   const serializedGradingResult = serializeGradingResult(gradingResult);
-  const checkMap = new Map(
-    gradingResult.checks.map((item) => [item.questionId || item.item, item])
-  );
+  const checkMap = new Map(gradingResult.checks.map((item) => [item.questionId || item.item, item]));
 
   const submission = await prisma.submission.create({
     data: {
@@ -291,15 +314,15 @@ export async function POST(req: NextRequest) {
       answers: {
         create: enrichedAnswers.map((answer) => {
           const question = questionMap.get(answer.questionId)!;
-          const detail =
-            checkMap.get(question.id) ||
-            checkMap.get(question.title || `第${question.orderIndex}题`);
+          const detail = checkMap.get(question.id) || checkMap.get(question.title || `第 ${question.orderIndex} 题`);
 
           return {
             questionId: question.id,
-            textAnswer: answer.textAnswer || null,
+            textAnswer: normalizeTextForStorage(question.type, answer),
             selectedOption: answer.selectedOption || null,
-            imagePath: answer.imagePath,
+            selectedOptions: serializeStringArray(answer.selectedOptions),
+            stepAnswerJson: serializeStringArray(answer.stepAnswers),
+            imagePath: answer.imagePath || null,
             aiScore: detail?.score || 0,
             aiFeedback: detail?.comment || "AI 已完成评分。",
             score: detail?.score || 0,
@@ -311,9 +334,7 @@ export async function POST(req: NextRequest) {
     },
     include: {
       answers: {
-        include: {
-          question: true
-        },
+        include: { question: true },
         orderBy: {
           question: { orderIndex: "asc" }
         }

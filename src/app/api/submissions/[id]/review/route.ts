@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { serializeGradingResult } from "@/lib/grading-result";
 import { requireRole } from "@/lib/auth";
+import { serializeGradingResult } from "@/lib/grading-result";
 import { prisma } from "@/lib/prisma";
 import { Role } from "@/lib/roles";
 import type { GradingResult } from "@/types/grading";
@@ -87,12 +87,13 @@ export async function PATCH(req: NextRequest, context: { params: { id: string } 
   const reviewMap = new Map(body.answers.map((item) => [item.answerId, item]));
   const reviewedAnswers = submission.answers.map((answer) => {
     const review = reviewMap.get(answer.id);
+
     return {
       answerId: answer.id,
       questionId: answer.questionId,
       score: Math.max(0, Math.min(answer.maxScore, Math.round(review?.score ?? answer.score))),
       maxScore: answer.maxScore,
-      feedback: (review?.feedback || answer.feedback || "").trim() || "教师已复核。",
+      feedback: (review?.feedback || answer.feedback || "").trim() || "教师已完成复核。",
       question: {
         id: answer.question.id,
         title: answer.question.title,

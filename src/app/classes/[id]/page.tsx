@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import {
   QUESTION_TYPES,
@@ -52,6 +52,15 @@ type DraftQuestion = {
   referenceImagePath?: string | null;
 };
 
+const QUESTION_TYPE_OPTIONS: Array<{ value: QuestionType; label: string; helper: string }> = [
+  { value: QUESTION_TYPES.CHOICE, label: "单选题", helper: "学生从选项中选择一个答案。" },
+  { value: QUESTION_TYPES.MULTIPLE_CHOICE, label: "多选题", helper: "学生可选择多个答案。" },
+  { value: QUESTION_TYPES.FILL_BLANK, label: "填空题", helper: "学生在线填写简短答案。" },
+  { value: QUESTION_TYPES.TEXT, label: "简答题", helper: "学生提交自由文本回答。" },
+  { value: QUESTION_TYPES.PROOF, label: "证明题", helper: "学生按步骤在线填写证明过程。" },
+  { value: QUESTION_TYPES.IMAGE, label: "图片补充题", helper: "允许学生上传图片作为补充答案。" }
+];
+
 const emptyQuestion: DraftQuestion = {
   title: "",
   prompt: "",
@@ -71,10 +80,7 @@ function formatDateTime(dateString: string | null) {
   return new Date(dateString).toLocaleString("zh-CN");
 }
 
-function reindexFiles(
-  files: Record<number, File | null>,
-  removedIndex: number
-): Record<number, File | null> {
+function reindexFiles(files: Record<number, File | null>, removedIndex: number) {
   return Object.entries(files).reduce<Record<number, File | null>>((acc, [index, file]) => {
     const numericIndex = Number(index);
     if (numericIndex === removedIndex || !file) {
@@ -83,6 +89,21 @@ function reindexFiles(
     acc[numericIndex > removedIndex ? numericIndex - 1 : numericIndex] = file;
     return acc;
   }, {});
+}
+
+function normalizeOptions(text: string) {
+  return text
+    .split("\n")
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function needsOptions(type: QuestionType) {
+  return type === QUESTION_TYPES.CHOICE || type === QUESTION_TYPES.MULTIPLE_CHOICE;
+}
+
+function questionTypeLabel(type: QuestionType) {
+  return QUESTION_TYPE_OPTIONS.find((item) => item.value === type)?.label || type;
 }
 
 export default function ClassDetailPage() {
@@ -108,6 +129,12 @@ export default function ClassDetailPage() {
   const [savingTemplate, setSavingTemplate] = useState(false);
   const [publishingAssignment, setPublishingAssignment] = useState(false);
   const [deletingTemplateId, setDeletingTemplateId] = useState<string | null>(null);
+  const [publishingTemplateId, setPublishingTemplateId] = useState<string | null>(null);
+
+  const totalScore = useMemo(
+    () => questions.reduce((sum, item) => sum + Number(item.maxScore || 0), 0),
+    [questions]
+  );
 
   async function loadData() {
     setLoading(true);
@@ -179,7 +206,14 @@ export default function ClassDetailPage() {
   function updateQuestion(index: number, field: keyof DraftQuestion, value: string | number | QuestionType) {
     setQuestions((current) =>
       current.map((item, itemIndex) =>
-        itemIndex === index ? { ...item, [field]: value } : item
+        itemIndex === index
+          ? {
+              ...item,
+              [field]: value,
+              optionsText:
+                field === "type" && !needsOptions(value as QuestionType) ? "" : item.optionsText
+            }
+          : item
       )
     );
   }
@@ -189,12 +223,7 @@ export default function ClassDetailPage() {
   }
 
   function removeQuestion(index: number) {
-    setQuestions((current) => {
-      if (current.length === 1) {
-        return current;
-      }
-      return current.filter((_, itemIndex) => itemIndex !== index);
-    });
+    setQuestions((current) => (current.length === 1 ? current : current.filter((_, itemIndex) => itemIndex !== index)));
     setPromptImageFiles((current) => reindexFiles(current, index));
     setReferenceImageFiles((current) => reindexFiles(current, index));
   }
@@ -209,17 +238,11 @@ export default function ClassDetailPage() {
 
   function buildQuestionPayload(): AssignmentQuestionInput[] {
     return questions.map((question, index) => ({
-      title: question.title.trim() || `第${index + 1}题`,
+      title: question.title.trim() || `第 ${index + 1} 题`,
       prompt: question.prompt.trim(),
       type: question.type,
       maxScore: Number(question.maxScore),
-      options:
-        question.type === QUESTION_TYPES.CHOICE
-          ? question.optionsText
-              .split("\n")
-              .map((item) => item.trim())
-              .filter(Boolean)
-          : [],
+      options: needsOptions(question.type) ? normalizeOptions(question.optionsText) : [],
       referenceAnswer: question.referenceAnswer.trim(),
       gradingRubric: question.gradingRubric.trim(),
       promptImagePath: question.promptImagePath || null,
@@ -252,9 +275,7 @@ export default function ClassDetailPage() {
     appendQuestionFiles(formData);
 
     try {
-      const endpoint = editingTemplateId
-        ? `/api/assignment-templates/${editingTemplateId}`
-        : "/api/assignment-templates";
+      const endpoint = editingTemplateId ? `/api/assignment-templates/${editingTemplateId}` : "/api/assignment-templates";
       const method = editingTemplateId ? "PATCH" : "POST";
 
       const res = await fetch(endpoint, {
@@ -269,9 +290,7 @@ export default function ClassDetailPage() {
       }
 
       if (editingTemplateId) {
-        setTemplates((current) =>
-          current.map((item) => (item.id === data.template.id ? data.template : item))
-        );
+        setTemplates((current) => current.map((item) => (item.id === data.template.id ? data.template : item)));
       } else {
         setTemplates((current) => [data.template, ...current]);
       }
@@ -377,9 +396,10 @@ export default function ClassDetailPage() {
 
   async function publishTemplate(templateId: string) {
     setError("");
-    const publishDueDate = templateDueDates[templateId] || "";
+    setPublishingTemplateId(templateId);
 
     try {
+      const publishDueDate = templateDueDates[templateId] || "";
       const res = await fetch(`/api/assignment-templates/${templateId}/publish`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -398,6 +418,8 @@ export default function ClassDetailPage() {
       await loadData();
     } catch {
       setError("网络异常，请稍后重试。");
+    } finally {
+      setPublishingTemplateId(null);
     }
   }
 
@@ -407,323 +429,364 @@ export default function ClassDetailPage() {
 
   return (
     <main className="portal-shell space-y-6">
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-semibold">{classInfo?.name}</h1>
           <p className="text-sm text-slate-600">
             班级码：{classInfo?.code} | 任课教师：{classInfo?.teacher.name}
           </p>
         </div>
-        <Link href="/dashboard" className="text-blue-600">
+        <Link href="/dashboard" className="text-sm font-medium text-blue-600">
           返回工作台
         </Link>
       </div>
 
+      <section className="grid gap-4 md:grid-cols-3">
+        <div className="portal-card p-5">
+          <p className="text-sm text-slate-500">班级人数</p>
+          <p className="mt-2 text-3xl font-semibold">{classInfo?._count.members || 0}</p>
+        </div>
+        <div className="portal-card p-5">
+          <p className="text-sm text-slate-500">已发布作业</p>
+          <p className="mt-2 text-3xl font-semibold">{classInfo?._count.assignments || 0}</p>
+        </div>
+        <div className="portal-card p-5">
+          <p className="text-sm text-slate-500">当前编辑总分</p>
+          <p className="mt-2 text-3xl font-semibold">{totalScore}</p>
+        </div>
+      </section>
+
+      {error ? <p className="rounded-2xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-600">{error}</p> : null}
+
       {user?.role === "TEACHER" ? (
         <>
-          <section className="portal-card p-5">
-            <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+          <section className="portal-card space-y-5 p-6">
+            <div className="flex items-center justify-between gap-4">
               <div>
-                <h2 className="text-xl font-semibold">备课编辑区</h2>
+                <h2 className="text-xl font-semibold">教师备课与作业发布</h2>
                 <p className="mt-1 text-sm text-slate-600">
-                  可以直接发布到当前班级，也可以先保存到作业库，后续重复使用。
+                  先设计结构化题目，再保存到作业库或直接发布到当前班级。
                 </p>
               </div>
-              <div className="flex flex-wrap gap-2">
-                {editingTemplateId ? (
-                  <span className="rounded-full bg-amber-50 px-3 py-2 text-sm text-amber-700">
-                    正在编辑作业库条目
-                  </span>
-                ) : null}
-                <button type="button" className="portal-button-secondary" onClick={resetEditor}>
-                  清空编辑器
-                </button>
-              </div>
+              <button
+                type="button"
+                onClick={resetEditor}
+                className="rounded-full border border-slate-300 px-4 py-2 text-sm text-slate-700"
+              >
+                新建空白作业
+              </button>
             </div>
 
-            <form className="space-y-4" onSubmit={createAssignment}>
-              <input
-                className="w-full"
-                placeholder="作业总标题"
-                value={title}
-                onChange={(e) => setTitle(e.target.value)}
-                required
-              />
-
-              <textarea
-                className="w-full rounded-md border border-slate-300 px-3 py-2"
-                placeholder="作业说明"
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
-              />
-
-              <div className="grid gap-3 md:grid-cols-2">
-                <label className="space-y-2 text-sm text-slate-700">
-                  <span>截止时间</span>
-                  <input type="datetime-local" value={dueDate} onChange={(e) => setDueDate(e.target.value)} />
-                </label>
-                <label className="flex items-center gap-2 rounded-xl border border-slate-200 px-4 py-3 text-sm text-slate-700">
+            <form onSubmit={createAssignment} className="space-y-6">
+              <div className="grid gap-4 md:grid-cols-2">
+                <label className="space-y-2">
+                  <span className="text-sm font-medium text-slate-700">作业总标题</span>
                   <input
-                    type="checkbox"
-                    checked={allowResubmission}
-                    onChange={(e) => setAllowResubmission(e.target.checked)}
+                    className="w-full rounded-2xl border border-slate-200 px-4 py-3"
+                    value={title}
+                    onChange={(e) => setTitle(e.target.value)}
+                    placeholder="例如：第 4 周离散数学在线作业"
                   />
-                  允许重复提交
+                </label>
+
+                <label className="space-y-2">
+                  <span className="text-sm font-medium text-slate-700">截止时间</span>
+                  <input
+                    type="datetime-local"
+                    className="w-full rounded-2xl border border-slate-200 px-4 py-3"
+                    value={dueDate}
+                    onChange={(e) => setDueDate(e.target.value)}
+                  />
                 </label>
               </div>
 
-              <div className="space-y-4">
+              <label className="block space-y-2">
+                <span className="text-sm font-medium text-slate-700">作业说明</span>
+                <textarea
+                  className="min-h-[120px] w-full rounded-2xl border border-slate-200 px-4 py-3"
+                  value={description}
+                  onChange={(e) => setDescription(e.target.value)}
+                  placeholder="可以写本次作业的要求、提交说明与答题建议。"
+                />
+              </label>
+
+              <label className="flex items-center gap-3 rounded-2xl border border-slate-200 px-4 py-3 text-sm text-slate-700">
+                <input
+                  type="checkbox"
+                  checked={allowResubmission}
+                  onChange={(e) => setAllowResubmission(e.target.checked)}
+                />
+                允许重复提交
+              </label>
+
+              <div className="space-y-5">
                 {questions.map((question, index) => (
-                  <article key={`${index}-${question.type}`} className="rounded-2xl border border-slate-200 p-4">
-                    <div className="mb-3 flex items-center justify-between">
-                      <h3 className="font-medium text-slate-900">题目 {index + 1}</h3>
-                      <button
-                        type="button"
-                        className="text-sm text-rose-600"
-                        onClick={() => removeQuestion(index)}
-                      >
-                        删除
-                      </button>
+                  <article key={`${index}-${question.title}`} className="rounded-3xl border border-slate-200 p-5">
+                    <div className="mb-4 flex items-center justify-between gap-4">
+                      <h3 className="text-lg font-semibold">题目 {index + 1}</h3>
+                      {questions.length > 1 ? (
+                        <button
+                          type="button"
+                          onClick={() => removeQuestion(index)}
+                          className="text-sm text-red-600"
+                        >
+                          删除
+                        </button>
+                      ) : null}
                     </div>
 
-                    <div className="grid gap-3 md:grid-cols-2">
+                    <div className="grid gap-4 md:grid-cols-[1.3fr_0.7fr]">
                       <input
-                        placeholder="题目标题"
+                        className="rounded-2xl border border-slate-200 px-4 py-3"
                         value={question.title}
                         onChange={(e) => updateQuestion(index, "title", e.target.value)}
+                        placeholder="题目标题"
                       />
                       <select
+                        className="rounded-2xl border border-slate-200 px-4 py-3"
                         value={question.type}
                         onChange={(e) => updateQuestion(index, "type", e.target.value as QuestionType)}
                       >
-                        <option value={QUESTION_TYPES.TEXT}>文本题</option>
-                        <option value={QUESTION_TYPES.CHOICE}>选择题</option>
-                        <option value={QUESTION_TYPES.IMAGE}>图片题</option>
+                        {QUESTION_TYPE_OPTIONS.map((item) => (
+                          <option key={item.value} value={item.value}>
+                            {item.label}
+                          </option>
+                        ))}
                       </select>
                     </div>
 
+                    <p className="mt-2 text-sm text-slate-500">
+                      {QUESTION_TYPE_OPTIONS.find((item) => item.value === question.type)?.helper}
+                    </p>
+
                     <textarea
-                      className="mt-3 w-full rounded-md border border-slate-300 px-3 py-2"
-                      placeholder="题目内容"
+                      className="mt-4 min-h-[120px] w-full rounded-2xl border border-slate-200 px-4 py-3"
                       value={question.prompt}
                       onChange={(e) => updateQuestion(index, "prompt", e.target.value)}
+                      placeholder="题目内容"
                     />
 
-                    <div className="mt-3 grid gap-3 md:grid-cols-2">
-                      <label className="space-y-2 text-sm text-slate-700">
-                        <span>题面图片</span>
+                    <div className="mt-4 grid gap-4 md:grid-cols-2">
+                      <label className="space-y-2">
+                        <span className="text-sm font-medium text-slate-700">题面图片</span>
                         <input
                           type="file"
                           accept="image/*"
                           onChange={(e) => updatePromptImage(index, e.target.files?.[0] || null)}
                         />
                         {question.promptImagePath ? (
-                          <a
-                            href={question.promptImagePath}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="text-xs text-blue-600"
-                          >
-                            查看已上传题面图片
-                          </a>
+                          <p className="text-xs text-slate-500">已保存题面图片，将在不重新上传时继续沿用。</p>
                         ) : null}
                       </label>
 
-                      <label className="space-y-2 text-sm text-slate-700">
-                        <span>参考答案图片</span>
+                      <label className="space-y-2">
+                        <span className="text-sm font-medium text-slate-700">参考答案图片</span>
                         <input
                           type="file"
                           accept="image/*"
                           onChange={(e) => updateReferenceImage(index, e.target.files?.[0] || null)}
                         />
                         {question.referenceImagePath ? (
-                          <a
-                            href={question.referenceImagePath}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="text-xs text-blue-600"
-                          >
-                            查看已上传参考答案图片
-                          </a>
+                          <p className="text-xs text-slate-500">已保存参考答案图片，将在不重新上传时继续沿用。</p>
                         ) : null}
                       </label>
                     </div>
 
-                    <div className="mt-3 grid gap-3 md:grid-cols-2">
+                    {needsOptions(question.type) ? (
+                      <textarea
+                        className="mt-4 min-h-[100px] w-full rounded-2xl border border-slate-200 px-4 py-3"
+                        value={question.optionsText}
+                        onChange={(e) => updateQuestion(index, "optionsText", e.target.value)}
+                        placeholder={"每行一个选项，例如：\nA. 命题 p\nB. 命题 q"}
+                      />
+                    ) : null}
+
+                    <div className="mt-4 grid gap-4 md:grid-cols-2">
                       <input
+                        className="rounded-2xl border border-slate-200 px-4 py-3"
                         type="number"
-                        min={1}
-                        placeholder="分值"
+                        min={0}
                         value={question.maxScore}
                         onChange={(e) => updateQuestion(index, "maxScore", Number(e.target.value))}
+                        placeholder="分值"
                       />
                       <input
-                        placeholder="参考答案 / 正确选项"
+                        className="rounded-2xl border border-slate-200 px-4 py-3"
                         value={question.referenceAnswer}
                         onChange={(e) => updateQuestion(index, "referenceAnswer", e.target.value)}
+                        placeholder="参考答案 / 正确选项"
                       />
                     </div>
 
                     <textarea
-                      className="mt-3 w-full rounded-md border border-slate-300 px-3 py-2"
-                      placeholder="评分 rubric，例如：定义是否准确、推理是否完整、结论是否规范。"
+                      className="mt-4 min-h-[100px] w-full rounded-2xl border border-slate-200 px-4 py-3"
                       value={question.gradingRubric}
                       onChange={(e) => updateQuestion(index, "gradingRubric", e.target.value)}
+                      placeholder="评分 rubric，例如：定义完整 5 分、推理准确 10 分、结论清晰 5 分。"
                     />
-
-                    {question.type === QUESTION_TYPES.CHOICE ? (
-                      <textarea
-                        className="mt-3 w-full rounded-md border border-slate-300 px-3 py-2"
-                        placeholder={"每行一个选项，例如：\nA. 命题恒真\nB. 命题可满足"}
-                        value={question.optionsText}
-                        onChange={(e) => updateQuestion(index, "optionsText", e.target.value)}
-                      />
-                    ) : null}
                   </article>
                 ))}
               </div>
 
               <div className="flex flex-wrap gap-3">
-                <button type="button" className="portal-button-secondary" onClick={addQuestion}>
+                <button
+                  type="button"
+                  onClick={addQuestion}
+                  className="rounded-full border border-slate-300 px-5 py-3 text-sm font-medium text-slate-700"
+                >
                   新增题目
                 </button>
                 <button
                   type="button"
-                  className="portal-button-secondary"
-                  disabled={savingTemplate}
                   onClick={saveTemplate}
+                  disabled={savingTemplate}
+                  className="rounded-full border border-slate-900 px-5 py-3 text-sm font-medium text-slate-900 disabled:opacity-60"
                 >
                   {savingTemplate ? "保存中..." : editingTemplateId ? "更新作业库条目" : "保存到作业库"}
                 </button>
-                <button type="submit" className="portal-button-primary" disabled={publishingAssignment}>
-                  {publishingAssignment ? "发布中..." : "发布到当前班级"}
+                <button
+                  type="submit"
+                  disabled={publishingAssignment}
+                  className="rounded-full bg-emerald-700 px-5 py-3 text-sm font-medium text-white disabled:opacity-60"
+                >
+                  {publishingAssignment ? "发布中..." : "发布作业"}
                 </button>
               </div>
             </form>
           </section>
 
-          <section className="portal-card p-5">
+          <section className="portal-card p-6">
             <div className="mb-4">
               <h2 className="text-xl font-semibold">教师作业库</h2>
-              <p className="mt-1 text-sm text-slate-600">
-                已保存的作业可以再次载入编辑、删除，或直接发布到当前班级。
-              </p>
+              <p className="mt-1 text-sm text-slate-600">可以复用往年题目，也可以先编辑后再发布到当前班级。</p>
             </div>
 
-            <div className="space-y-4">
-              {templates.length === 0 ? <p className="text-sm text-slate-500">当前还没有作业库内容。</p> : null}
-
-              {templates.map((template) => (
-                <article key={template.id} className="rounded-2xl border border-slate-200 p-4">
-                  <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-                    <div>
-                      <h3 className="font-medium text-slate-900">{template.title}</h3>
-                      <p className="mt-1 text-sm text-slate-600">
-                        题目数：{template.questions.length} | 总分：{template.totalScore} | 允许重复提交：
-                        {template.allowResubmission ? "是" : "否"}
-                      </p>
-                      <p className="mt-1 text-sm text-slate-500">最近保存：{formatDateTime(template.createdAt)}</p>
-                      {template.description ? <p className="mt-2 text-sm text-slate-600">{template.description}</p> : null}
-                    </div>
-
-                    <div className="flex flex-wrap gap-2">
-                      <button
-                        type="button"
-                        className="portal-button-secondary"
-                        onClick={() => loadTemplateToEditor(template)}
-                      >
-                        编辑已有条目
-                      </button>
-                      <button
-                        type="button"
-                        className="rounded-full border border-rose-200 bg-rose-50 px-5 py-3 text-sm font-semibold text-rose-700 transition hover:bg-rose-100"
-                        onClick={() => deleteTemplate(template.id)}
-                        disabled={deletingTemplateId === template.id}
-                      >
-                        {deletingTemplateId === template.id ? "删除中..." : "删除条目"}
-                      </button>
-                    </div>
-                  </div>
-
-                  <div className="mt-4 grid gap-3 lg:grid-cols-[1fr_auto] lg:items-end">
-                    <label className="space-y-2 text-sm text-slate-700">
-                      <span>发布到当前班级的截止时间</span>
-                      <input
-                        type="datetime-local"
-                        value={templateDueDates[template.id] || ""}
-                        onChange={(e) =>
-                          setTemplateDueDates((current) => ({
-                            ...current,
-                            [template.id]: e.target.value
-                          }))
-                        }
-                      />
-                    </label>
-                    <button
-                      type="button"
-                      className="portal-button-primary"
-                      onClick={() => publishTemplate(template.id)}
-                    >
-                      从作业库发布到本班
-                    </button>
-                  </div>
-
-                  <div className="mt-4 space-y-3">
-                    {template.questions.map((question) => (
-                      <div key={question.id} className="rounded-xl bg-slate-50 p-4">
-                        <p className="font-medium text-slate-900">{question.title}</p>
-                        <p className="mt-1 text-sm text-slate-600">{question.prompt}</p>
-                        <p className="mt-2 text-sm text-slate-500">
-                          类型：{question.type} | 分值：{question.maxScore}
+            {templates.length === 0 ? (
+              <p className="text-sm text-slate-500">当前还没有保存的作业库条目。</p>
+            ) : (
+              <div className="space-y-4">
+                {templates.map((template) => (
+                  <article key={template.id} className="rounded-3xl border border-slate-200 p-5">
+                    <div className="flex flex-wrap items-start justify-between gap-4">
+                      <div>
+                        <h3 className="text-lg font-semibold">{template.title}</h3>
+                        <p className="mt-1 text-sm text-slate-600">
+                          题目数：{template.questions.length} | 总分：{template.totalScore} | 创建时间：
+                          {formatDateTime(template.createdAt)}
                         </p>
-                        {question.gradingRubric ? (
-                          <p className="mt-2 text-sm text-slate-500">评分标准：{question.gradingRubric}</p>
+                        {template.description ? (
+                          <p className="mt-3 whitespace-pre-wrap text-sm text-slate-600">{template.description}</p>
                         ) : null}
                       </div>
-                    ))}
-                  </div>
-                </article>
-              ))}
-            </div>
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          onClick={() => loadTemplateToEditor(template)}
+                          className="rounded-full border border-slate-300 px-4 py-2 text-sm text-slate-700"
+                        >
+                          编辑
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => deleteTemplate(template.id)}
+                          disabled={deletingTemplateId === template.id}
+                          className="rounded-full border border-red-200 px-4 py-2 text-sm text-red-600 disabled:opacity-60"
+                        >
+                          {deletingTemplateId === template.id ? "删除中..." : "删除"}
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="mt-4 space-y-3">
+                      {template.questions.map((question) => (
+                        <div key={question.id} className="rounded-2xl bg-slate-50 p-4">
+                          <div className="flex items-center justify-between gap-3">
+                            <p className="font-medium text-slate-900">{question.title}</p>
+                            <span className="text-xs text-slate-500">
+                              {questionTypeLabel(question.type)} | {question.maxScore} 分
+                            </span>
+                          </div>
+                          <p className="mt-2 whitespace-pre-wrap text-sm text-slate-600">{question.prompt}</p>
+                        </div>
+                      ))}
+                    </div>
+
+                    <div className="mt-4 flex flex-wrap items-end gap-3">
+                      <label className="space-y-2">
+                        <span className="text-sm text-slate-600">发布到本班时的截止时间</span>
+                        <input
+                          type="datetime-local"
+                          className="rounded-2xl border border-slate-200 px-4 py-3"
+                          value={templateDueDates[template.id] || ""}
+                          onChange={(e) =>
+                            setTemplateDueDates((current) => ({
+                              ...current,
+                              [template.id]: e.target.value
+                            }))
+                          }
+                        />
+                      </label>
+                      <button
+                        type="button"
+                        onClick={() => publishTemplate(template.id)}
+                        disabled={publishingTemplateId === template.id}
+                        className="rounded-full bg-slate-900 px-5 py-3 text-sm font-medium text-white disabled:opacity-60"
+                      >
+                        {publishingTemplateId === template.id ? "发布中..." : "从作业库发布到本班"}
+                      </button>
+                    </div>
+                  </article>
+                ))}
+              </div>
+            )}
           </section>
         </>
       ) : null}
 
-      {error ? <p className="text-sm text-red-600">{error}</p> : null}
-
-      <section className="portal-card p-5">
-        <h2 className="mb-3 text-xl font-semibold">班级作业</h2>
-        <div className="space-y-3">
-          {assignments.length === 0 ? <p className="text-sm text-slate-500">暂时还没有发布作业。</p> : null}
-
-          {assignments.map((item) => (
-            <Link
-              key={item.id}
-              href={`/assignments/${item.id}`}
-              className="block rounded-2xl border border-slate-200 p-4 transition hover:bg-slate-50"
-            >
-              <div className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
-                <div>
-                  <p className="font-medium text-slate-900">{item.title}</p>
-                  <p className="mt-1 text-sm text-slate-600">
-                    题目数：{item.questionCount} | 总分：{item.totalScore} | 允许重复提交：
-                    {item.allowResubmission ? "是" : "否"}
-                  </p>
-                  <p className="mt-1 text-sm text-slate-600">截止日期：{formatDateTime(item.dueDate)}</p>
-                  {item.template ? <p className="mt-1 text-sm text-teal-700">来源作业库：{item.template.title}</p> : null}
-                </div>
-
-                {item.latestSubmission ? (
-                  <div className="rounded-xl bg-slate-50 px-4 py-3 text-sm text-slate-600">
-                    最近提交：第 {item.latestSubmission.attemptNumber} 次 | 得分 {item.latestSubmission.overallScore}
-                  </div>
-                ) : null}
-              </div>
-
-              {item.description ? <p className="mt-3 text-sm text-slate-600">{item.description}</p> : null}
-            </Link>
-          ))}
+      <section className="portal-card p-6">
+        <div className="mb-4">
+          <h2 className="text-xl font-semibold">已发布作业</h2>
+          <p className="mt-1 text-sm text-slate-600">学生将在线填写答案，教师可在作业详情页查看 AI 建议与人工复核结果。</p>
         </div>
+
+        {assignments.length === 0 ? (
+          <p className="text-sm text-slate-500">当前班级还没有发布作业。</p>
+        ) : (
+          <div className="space-y-4">
+            {assignments.map((assignment) => (
+              <article key={assignment.id} className="rounded-3xl border border-slate-200 p-5">
+                <div className="flex flex-wrap items-start justify-between gap-4">
+                  <div>
+                    <h3 className="text-lg font-semibold">{assignment.title}</h3>
+                    <p className="mt-1 text-sm text-slate-600">
+                      截止时间：{formatDateTime(assignment.dueDate)} | 题目数：{assignment.questionCount} | 总分：
+                      {assignment.totalScore}
+                    </p>
+                    {assignment.template ? (
+                      <p className="mt-1 text-xs text-slate-500">来源作业库：{assignment.template.title}</p>
+                    ) : null}
+                    {assignment.description ? (
+                      <p className="mt-3 whitespace-pre-wrap text-sm text-slate-600">{assignment.description}</p>
+                    ) : null}
+                  </div>
+
+                  <div className="text-right">
+                    {user?.role === "STUDENT" && assignment.latestSubmission ? (
+                      <p className="text-sm text-slate-600">
+                        最近提交：第 {assignment.latestSubmission.attemptNumber} 次，得分
+                        {" "}
+                        {assignment.latestSubmission.overallScore} 分
+                      </p>
+                    ) : null}
+                    <Link href={`/assignments/${assignment.id}`} className="mt-3 inline-block text-sm font-medium text-blue-600">
+                      查看作业详情
+                    </Link>
+                  </div>
+                </div>
+              </article>
+            ))}
+          </div>
+        )}
       </section>
     </main>
   );

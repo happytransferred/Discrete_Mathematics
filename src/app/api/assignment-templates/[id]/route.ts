@@ -8,7 +8,11 @@ import { uploadTeacherImage } from "@/lib/upload-assets";
 import type { AssignmentQuestionInput } from "@/types/assignment";
 
 function parseQuestions(value: string) {
-  return JSON.parse(value) as AssignmentQuestionInput[];
+  try {
+    return JSON.parse(value) as AssignmentQuestionInput[];
+  } catch {
+    return [];
+  }
 }
 
 async function normalizeQuestions(
@@ -26,18 +30,10 @@ async function normalizeQuestions(
       let referenceImagePath = question.referenceImagePath || null;
 
       if (promptImageFile instanceof File && promptImageFile.size > 0) {
-        promptImagePath = await uploadTeacherImage(
-          promptImageFile,
-          userId,
-          `${scopePrefix}-prompt-${index + 1}`
-        );
+        promptImagePath = await uploadTeacherImage(promptImageFile, userId, `${scopePrefix}-prompt-${index + 1}`);
       }
       if (referenceImageFile instanceof File && referenceImageFile.size > 0) {
-        referenceImagePath = await uploadTeacherImage(
-          referenceImageFile,
-          userId,
-          `${scopePrefix}-reference-${index + 1}`
-        );
+        referenceImagePath = await uploadTeacherImage(referenceImageFile, userId, `${scopePrefix}-reference-${index + 1}`);
       }
 
       return {
@@ -94,8 +90,7 @@ export async function PATCH(req: NextRequest, context: { params: { id: string } 
   const title = String(formData.get("title") || "").trim();
   const description = String(formData.get("description") || "").trim();
   const allowResubmission = String(formData.get("allowResubmission") || "true") !== "false";
-  const rawQuestions = String(formData.get("questions") || "[]");
-  const questions = parseQuestions(rawQuestions);
+  const questions = parseQuestions(String(formData.get("questions") || "[]"));
 
   if (!title) {
     return NextResponse.json({ error: "作业总标题不能为空。" }, { status: 400 });
@@ -111,12 +106,7 @@ export async function PATCH(req: NextRequest, context: { params: { id: string } 
     return NextResponse.json({ error: "作业库条目不存在。" }, { status: 404 });
   }
 
-  const normalizedQuestions = await normalizeQuestions(
-    questions,
-    formData,
-    auth.user.id,
-    `template-update-${templateId}`
-  );
+  const normalizedQuestions = await normalizeQuestions(questions, formData, auth.user.id, `template-update-${templateId}`);
 
   const template = await prisma.assignmentTemplate.update({
     where: { id: templateId },

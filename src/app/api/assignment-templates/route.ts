@@ -8,7 +8,11 @@ import { uploadTeacherImage } from "@/lib/upload-assets";
 import type { AssignmentQuestionInput } from "@/types/assignment";
 
 function parseQuestions(value: string) {
-  return JSON.parse(value) as AssignmentQuestionInput[];
+  try {
+    return JSON.parse(value) as AssignmentQuestionInput[];
+  } catch {
+    return [];
+  }
 }
 
 async function normalizeQuestions(
@@ -26,18 +30,10 @@ async function normalizeQuestions(
       let referenceImagePath = question.referenceImagePath || null;
 
       if (promptImageFile instanceof File && promptImageFile.size > 0) {
-        promptImagePath = await uploadTeacherImage(
-          promptImageFile,
-          userId,
-          `${scopePrefix}-prompt-${index + 1}`
-        );
+        promptImagePath = await uploadTeacherImage(promptImageFile, userId, `${scopePrefix}-prompt-${index + 1}`);
       }
       if (referenceImageFile instanceof File && referenceImageFile.size > 0) {
-        referenceImagePath = await uploadTeacherImage(
-          referenceImageFile,
-          userId,
-          `${scopePrefix}-reference-${index + 1}`
-        );
+        referenceImagePath = await uploadTeacherImage(referenceImageFile, userId, `${scopePrefix}-reference-${index + 1}`);
       }
 
       return {
@@ -92,8 +88,7 @@ export async function POST(req: NextRequest) {
   const title = String(formData.get("title") || "").trim();
   const description = String(formData.get("description") || "").trim();
   const allowResubmission = String(formData.get("allowResubmission") || "true") !== "false";
-  const rawQuestions = String(formData.get("questions") || "[]");
-  const questions = parseQuestions(rawQuestions);
+  const questions = parseQuestions(String(formData.get("questions") || "[]"));
 
   if (!title) {
     return NextResponse.json({ error: "作业总标题不能为空。" }, { status: 400 });
@@ -102,12 +97,7 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "请至少添加一道题目。" }, { status: 400 });
   }
 
-  const normalizedQuestions = await normalizeQuestions(
-    questions,
-    formData,
-    auth.user.id,
-    "template-create"
-  );
+  const normalizedQuestions = await normalizeQuestions(questions, formData, auth.user.id, "template-create");
 
   const template = await prisma.assignmentTemplate.create({
     data: {
@@ -127,10 +117,5 @@ export async function POST(req: NextRequest) {
     }
   });
 
-  return NextResponse.json(
-    {
-      template: serializeTemplate(template)
-    },
-    { status: 201 }
-  );
+  return NextResponse.json({ template: serializeTemplate(template) }, { status: 201 });
 }
