@@ -5,8 +5,8 @@ import { parseGradingResult, serializeGradingResult } from "@/lib/grading-result
 import { prisma } from "@/lib/prisma";
 import { Role } from "@/lib/roles";
 import { buildSubmissionObjectKey, getStorageBucket, getSupabaseAdmin } from "@/lib/supabase-server";
-import { gradeHomework } from "@/services/grading-service";
 import { QUESTION_TYPES, type AssignmentQuestionView, type StudentAnswerDraft } from "@/types/assignment";
+import type { GradingResult } from "@/types/grading";
 
 export const runtime = "nodejs";
 
@@ -67,6 +67,26 @@ function normalizeTextForStorage(questionType: string, draft: StudentAnswerDraft
   }
 
   return draft.textAnswer?.trim() || null;
+}
+
+function buildPendingGradingResult(questions: AssignmentQuestionView[]): GradingResult {
+  return {
+    overallScore: 0,
+    maxScore: questions.reduce((sum, item) => sum + item.maxScore, 0),
+    summary: "作业已提交，AI 正在后台评分，请稍后刷新查看结果。",
+    graderType: "RULE",
+    model: null,
+    checks: questions.map((question) => ({
+      questionId: question.id,
+      item: question.title,
+      score: 0,
+      maxScore: question.maxScore,
+      comment: "等待 AI 评分中。",
+      rubric: question.gradingRubric || null,
+      source: "RULE"
+    })),
+    suggestions: []
+  };
 }
 
 function formatSubmission(
@@ -273,49 +293,37 @@ export async function POST(req: NextRequest) {
         imagePath = await uploadSubmissionImage(imageFile, auth.user.id, assignmentId, question.id);
       }
 
-      const selectedOptions =
-        question.type === QUESTION_TYPES.MULTIPLE_CHOICE ? draft?.selectedOptions || [] : [];
-      const stepAnswers = question.type === QUESTION_TYPES.PROOF ? draft?.stepAnswers || [] : [];
-
       return {
         questionId: question.id,
         type: question.type as AssignmentQuestionView["type"],
         textAnswer: draft?.textAnswer || "",
         selectedOption: draft?.selectedOption || "",
-        selectedOptions,
-        stepAnswers,
+        selectedOptions: question.type === QUESTION_TYPES.MULTIPLE_CHOICE ? draft?.selectedOptions || [] : [],
+        stepAnswers: question.type === QUESTION_TYPES.PROOF ? draft?.stepAnswers || [] : [],
         imagePath
       };
     })
   );
 
   const formattedQuestions = assignment.questions.map((question) => formatQuestion(question));
-  const gradingResult = await gradeHomework({
-    assignmentTitle: assignment.title,
-    assignmentDescription: assignment.description,
-    questions: formattedQuestions,
-    answers: enrichedAnswers
-  });
-  const serializedGradingResult = serializeGradingResult(gradingResult);
-  const checkMap = new Map(gradingResult.checks.map((item) => [item.questionId || item.item, item]));
+  const pendingResult = buildPendingGradingResult(formattedQuestions);
+  const serializedPending = serializeGradingResult(pendingResult);
 
   const submission = await prisma.submission.create({
     data: {
       assignmentId,
       studentId: auth.user.id,
       attemptNumber: previousAttempts + 1,
-      gradingStatus: "AI_GRADED",
-      aiSummary: gradingResult.summary,
-      overallScore: gradingResult.overallScore,
-      maxScore: gradingResult.maxScore,
-      summary: gradingResult.summary,
-      aiGradingResult: serializedGradingResult,
-      gradingResult: serializedGradingResult,
+      gradingStatus: "PENDING",
+      aiSummary: null,
+      overallScore: 0,
+      maxScore: pendingResult.maxScore,
+      summary: pendingResult.summary,
+      aiGradingResult: null,
+      gradingResult: serializedPending,
       answers: {
         create: enrichedAnswers.map((answer) => {
           const question = questionMap.get(answer.questionId)!;
-          const detail = checkMap.get(question.id) || checkMap.get(question.title || `第 ${question.orderIndex} 题`);
-
           return {
             questionId: question.id,
             textAnswer: normalizeTextForStorage(question.type, answer),
@@ -323,11 +331,11 @@ export async function POST(req: NextRequest) {
             selectedOptions: serializeStringArray(answer.selectedOptions),
             stepAnswerJson: serializeStringArray(answer.stepAnswers),
             imagePath: answer.imagePath || null,
-            aiScore: detail?.score || 0,
-            aiFeedback: detail?.comment || "AI 已完成评分。",
-            score: detail?.score || 0,
+            aiScore: null,
+            aiFeedback: null,
+            score: 0,
             maxScore: question.maxScore,
-            feedback: detail?.comment || "AI 已完成评分。"
+            feedback: "等待 AI 评分中。"
           };
         })
       }

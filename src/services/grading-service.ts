@@ -41,6 +41,8 @@ type EnrichedAnswer = StudentAnswerDraft & {
   imagePath?: string | null;
 };
 
+const AI_REQUEST_TIMEOUT_MS = 15000;
+
 function getProviderConfig(): ProviderConfig | null {
   const provider = getAiProvider();
   const apiKey = getAiApiKey(provider);
@@ -205,6 +207,20 @@ function parseJsonObject(text: string) {
   return JSON.parse(text.slice(firstBrace, lastBrace + 1)) as AiQuestionResult;
 }
 
+async function fetchWithTimeout(url: string, init: RequestInit, timeoutMs = AI_REQUEST_TIMEOUT_MS) {
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    return await fetch(url, {
+      ...init,
+      signal: controller.signal
+    });
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
 function buildStudentAnswerSummary(answer: EnrichedAnswer | undefined, question: AssignmentQuestionView) {
   if (!answer) {
     return "学生未提交该题答案。";
@@ -262,7 +278,7 @@ async function callCompatibleChatCompletion(args: {
   question: AssignmentQuestionView;
   answer: EnrichedAnswer | undefined;
 }) {
-  const response = await fetch(`${args.config.baseUrl}/chat/completions`, {
+  const response = await fetchWithTimeout(`${args.config.baseUrl}/chat/completions`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
@@ -355,7 +371,7 @@ async function callOpenAiResponses(args: {
     inputContent.push({ type: "input_image", image_url: args.answer.imagePath });
   }
 
-  const response = await fetch(`${args.config.baseUrl}/responses`, {
+  const response = await fetchWithTimeout(`${args.config.baseUrl}/responses`, {
     method: "POST",
     headers: {
       "Content-Type": "application/json",

@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from "react";
+import { ChangeEvent, FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
 import {
   QUESTION_TYPES,
@@ -58,6 +58,9 @@ function formatDateTime(dateString: string | null | undefined) {
 }
 
 function gradingStatusLabel(status: string) {
+  if (status === "PENDING") {
+    return "评分处理中";
+  }
   if (status === "TEACHER_REVIEWED") {
     return "教师已复核";
   }
@@ -127,6 +130,28 @@ export default function AssignmentPage() {
   const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
   const [loading, setLoading] = useState(true);
+
+  const refreshStudentSubmissions = useCallback(async () => {
+    const submissionsRes = await fetch(`/api/submissions?assignmentId=${assignmentId}`);
+    const submissionsData = await submissionsRes.json();
+    if (!submissionsRes.ok) {
+      throw new Error(submissionsData.error || "加载提交记录失败。");
+    }
+
+    setLatestSubmission(submissionsData.latestSubmission || null);
+    setSubmissionHistory(submissionsData.submissionHistory || []);
+  }, [assignmentId]);
+
+  async function triggerBackgroundGrading(submissionId: string) {
+    try {
+      await fetch(`/api/submissions/${submissionId}/grade`, {
+        method: "POST"
+      });
+      await refreshStudentSubmissions();
+    } catch {
+      // 留给前端轮询继续处理
+    }
+  }
 
   async function loadData() {
     setLoading(true);
@@ -200,6 +225,18 @@ export default function AssignmentPage() {
     });
   }, [assignment, user?.role]);
 
+  useEffect(() => {
+    if (user?.role !== "STUDENT" || !latestSubmission || latestSubmission.gradingStatus !== "PENDING") {
+      return;
+    }
+
+    const timer = window.setInterval(() => {
+      refreshStudentSubmissions().catch(() => undefined);
+    }, 4000);
+
+    return () => window.clearInterval(timer);
+  }, [latestSubmission, refreshStudentSubmissions, user?.role]);
+
   const isExpired = useMemo(() => {
     if (!assignment?.dueDate) {
       return false;
@@ -209,7 +246,8 @@ export default function AssignmentPage() {
 
   function updateDraft(questionId: string, patch: Partial<StudentAnswerDraft>) {
     setDraftAnswers((current) => {
-      const base = current[questionId] || buildEmptyDraft(assignment!.questions.find((item) => item.id === questionId)!);
+      const question = assignment?.questions.find((item) => item.id === questionId);
+      const base = current[questionId] || (question ? buildEmptyDraft(question) : { questionId, type: QUESTION_TYPES.TEXT });
       return {
         ...current,
         [questionId]: {
@@ -289,6 +327,7 @@ export default function AssignmentPage() {
       setLatestSubmission(data.submission);
       setSubmissionHistory((current) => [data.submission, ...current]);
       setDraftFiles({});
+      void triggerBackgroundGrading(data.submission.id);
     } catch {
       setError("网络异常，请稍后重试。");
     } finally {
@@ -629,7 +668,11 @@ export default function AssignmentPage() {
                       </p>
                     </div>
                     <div className="text-right">
-                      <p className="text-2xl font-semibold">{latestSubmission.overallScore}/{latestSubmission.maxScore}</p>
+                      <p className="text-2xl font-semibold">
+                        {latestSubmission.gradingStatus === "PENDING"
+                          ? "-- / " + latestSubmission.maxScore
+                          : `${latestSubmission.overallScore}/${latestSubmission.maxScore}`}
+                      </p>
                       <p className="text-sm text-slate-500">{gradingStatusLabel(latestSubmission.gradingStatus)}</p>
                     </div>
                   </div>
@@ -639,11 +682,17 @@ export default function AssignmentPage() {
                       <article key={answer.id} className="rounded-2xl bg-slate-50 p-4">
                         <div className="flex items-center justify-between gap-3">
                           <p className="font-medium text-slate-900">{answer.questionTitle}</p>
-                          <span className="text-sm text-slate-500">{answer.score}/{answer.maxScore}</span>
+                          <span className="text-sm text-slate-500">
+                            {latestSubmission.gradingStatus === "PENDING" ? "评分中" : `${answer.score}/${answer.maxScore}`}
+                          </span>
                         </div>
                         <div className="mt-3">{renderAnswerContent(answer)}</div>
                         <div className="mt-3 rounded-2xl bg-white px-4 py-3 text-sm text-slate-700">
-                          <p>AI 建议：{answer.aiFeedback || "暂无"}</p>
+                          <p>
+                            {latestSubmission.gradingStatus === "PENDING"
+                              ? "系统正在后台调用 AI 评分，请稍后自动刷新查看结果。"
+                              : `AI 建议：${answer.aiFeedback || "暂无"}`}
+                          </p>
                           {answer.teacherFeedback ? <p className="mt-2">教师反馈：{answer.teacherFeedback}</p> : null}
                         </div>
                       </article>
@@ -657,8 +706,11 @@ export default function AssignmentPage() {
                     <div className="mt-4 space-y-3">
                       {submissionHistory.slice(1).map((submission) => (
                         <div key={submission.id} className="rounded-2xl bg-slate-50 px-4 py-3 text-sm text-slate-700">
-                          第 {submission.attemptNumber} 次 | {submission.overallScore}/{submission.maxScore} 分 |{" "}
-                          {formatDateTime(submission.createdAt)}
+                          第 {submission.attemptNumber} 次 |{" "}
+                          {submission.gradingStatus === "PENDING"
+                            ? "评分中"
+                            : `${submission.overallScore}/${submission.maxScore} 分`}{" "}
+                          | {formatDateTime(submission.createdAt)}
                         </div>
                       ))}
                     </div>
@@ -697,7 +749,11 @@ export default function AssignmentPage() {
                         </p>
                       </div>
                       <div className="text-right">
-                        <p className="text-2xl font-semibold">{submission.overallScore}/{submission.maxScore}</p>
+                        <p className="text-2xl font-semibold">
+                          {submission.gradingStatus === "PENDING"
+                            ? "-- / " + submission.maxScore
+                            : `${submission.overallScore}/${submission.maxScore}`}
+                        </p>
                         {submission.reviewedAt ? (
                           <p className="text-sm text-slate-500">复核时间：{formatDateTime(submission.reviewedAt)}</p>
                         ) : null}
@@ -716,8 +772,16 @@ export default function AssignmentPage() {
                           </div>
                           <div className="mt-3">{renderAnswerContent(answer)}</div>
                           <div className="mt-4 rounded-2xl bg-white px-4 py-3 text-sm text-slate-700">
-                            <p>AI 建议分：{answer.aiScore ?? answer.score} / {answer.maxScore}</p>
-                            <p className="mt-2">AI 评语：{answer.aiFeedback || answer.feedback}</p>
+                            <p>
+                              {submission.gradingStatus === "PENDING"
+                                ? "该提交仍在后台评分中，完成后会显示 AI 建议分。"
+                                : `AI 建议分：${answer.aiScore ?? answer.score} / ${answer.maxScore}`}
+                            </p>
+                            <p className="mt-2">
+                              {submission.gradingStatus === "PENDING"
+                                ? "请稍后刷新页面查看 AI 结果。"
+                                : `AI 评语：${answer.aiFeedback || answer.feedback}`}
+                            </p>
                           </div>
 
                           <div className="mt-4 grid gap-4 md:grid-cols-[120px_1fr]">
@@ -728,12 +792,14 @@ export default function AssignmentPage() {
                               className="rounded-2xl border border-slate-200 px-4 py-3"
                               value={reviewDraft.answers[answer.id]?.score ?? answer.score}
                               onChange={(e) => updateReviewAnswer(submission.id, answer.id, "score", e.target.value)}
+                              disabled={submission.gradingStatus === "PENDING"}
                             />
                             <textarea
                               className="min-h-[90px] rounded-2xl border border-slate-200 px-4 py-3"
                               value={reviewDraft.answers[answer.id]?.feedback ?? answer.feedback}
                               onChange={(e) => updateReviewAnswer(submission.id, answer.id, "feedback", e.target.value)}
                               placeholder="教师反馈"
+                              disabled={submission.gradingStatus === "PENDING"}
                             />
                           </div>
                         </article>
@@ -746,11 +812,12 @@ export default function AssignmentPage() {
                         value={reviewDraft.summary}
                         onChange={(e) => updateReviewSummary(submission.id, e.target.value)}
                         placeholder="教师总评"
+                        disabled={submission.gradingStatus === "PENDING"}
                       />
                       <button
                         type="button"
                         onClick={() => saveReview(submission.id)}
-                        disabled={reviewingId === submission.id}
+                        disabled={reviewingId === submission.id || submission.gradingStatus === "PENDING"}
                         className="rounded-full bg-slate-900 px-5 py-3 text-sm font-medium text-white disabled:opacity-60"
                       >
                         {reviewingId === submission.id ? "保存中..." : "保存教师复核结果"}
