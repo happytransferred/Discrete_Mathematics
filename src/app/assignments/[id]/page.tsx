@@ -1,8 +1,9 @@
 "use client";
 
 import Link from "next/link";
-import { ChangeEvent, FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import { ChangeEvent, FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
+import { SymbolToolbar } from "@/components/symbol-toolbar";
 import {
   QUESTION_TYPES,
   type AssignmentQuestionView,
@@ -130,6 +131,64 @@ export default function AssignmentPage() {
   const [error, setError] = useState("");
   const [pending, setPending] = useState(false);
   const [loading, setLoading] = useState(true);
+  const inputRefs = useRef<Record<string, HTMLInputElement | HTMLTextAreaElement | null>>({});
+  const activeInputKeyRef = useRef<string | null>(null);
+
+  function setInputRef(key: string, element: HTMLInputElement | HTMLTextAreaElement | null) {
+    inputRefs.current[key] = element;
+  }
+
+  function markActiveInput(key: string) {
+    activeInputKeyRef.current = key;
+  }
+
+  function insertIntoControlledValue(
+    currentValue: string,
+    symbol: string,
+    key: string,
+    applyValue: (nextValue: string) => void
+  ) {
+    const target = inputRefs.current[key];
+    const start = target?.selectionStart ?? currentValue.length;
+    const end = target?.selectionEnd ?? currentValue.length;
+    const nextValue = `${currentValue.slice(0, start)}${symbol}${currentValue.slice(end)}`;
+    const nextCaret = start + symbol.length;
+
+    applyValue(nextValue);
+
+    requestAnimationFrame(() => {
+      const nextTarget = inputRefs.current[key];
+      nextTarget?.focus();
+      nextTarget?.setSelectionRange(nextCaret, nextCaret);
+    });
+  }
+
+  function insertSymbolIntoActiveAnswer(symbol: string) {
+    const activeKey = activeInputKeyRef.current;
+    if (!activeKey || !assignment) {
+      return;
+    }
+
+    const [questionId, mode, indexText] = activeKey.split(":");
+    const draft = draftAnswers[questionId] || buildEmptyDraft(assignment.questions.find((item) => item.id === questionId)!);
+
+    if (mode === "text") {
+      insertIntoControlledValue(draft.textAnswer || "", symbol, activeKey, (nextValue) => {
+        updateDraft(questionId, { textAnswer: nextValue });
+      });
+      return;
+    }
+
+    if (mode === "step") {
+      const index = Number(indexText);
+      const steps = [...(draft.stepAnswers || [""])];
+      const currentValue = steps[index] || "";
+      insertIntoControlledValue(currentValue, symbol, activeKey, (nextValue) => {
+        steps[index] = nextValue;
+        updateDraft(questionId, { stepAnswers: steps });
+      });
+    }
+  }
 
   const refreshStudentSubmissions = useCallback(async () => {
     const submissionsRes = await fetch(`/api/submissions?assignmentId=${assignmentId}`);
@@ -437,16 +496,22 @@ export default function AssignmentPage() {
         );
       case QUESTION_TYPES.FILL_BLANK:
         return (
-          <input
-            className="w-full rounded-2xl border border-slate-200 px-4 py-3"
-            value={draft.textAnswer || ""}
-            onChange={(e) => updateDraft(question.id, { textAnswer: e.target.value })}
-            placeholder="请输入答案"
-          />
+          <div className="space-y-3">
+            <SymbolToolbar onInsert={insertSymbolIntoActiveAnswer} />
+            <input
+              ref={(element) => setInputRef(`${question.id}:text`, element)}
+              onFocus={() => markActiveInput(`${question.id}:text`)}
+              className="w-full rounded-2xl border border-slate-200 px-4 py-3"
+              value={draft.textAnswer || ""}
+              onChange={(e) => updateDraft(question.id, { textAnswer: e.target.value })}
+              placeholder="请输入答案"
+            />
+          </div>
         );
       case QUESTION_TYPES.PROOF:
         return (
           <div className="space-y-3">
+            <SymbolToolbar onInsert={insertSymbolIntoActiveAnswer} />
             {(draft.stepAnswers || [""]).map((step, index) => (
               <div key={`${question.id}-${index}`} className="rounded-2xl border border-slate-200 p-3">
                 <div className="mb-2 flex items-center justify-between gap-3">
@@ -460,6 +525,8 @@ export default function AssignmentPage() {
                   </button>
                 </div>
                 <textarea
+                  ref={(element) => setInputRef(`${question.id}:step:${index}`, element)}
+                  onFocus={() => markActiveInput(`${question.id}:step:${index}`)}
                   className="min-h-[100px] w-full rounded-2xl border border-slate-200 px-4 py-3"
                   value={step}
                   onChange={(e) => updateProofStep(question.id, index, e.target.value)}
@@ -480,7 +547,10 @@ export default function AssignmentPage() {
         return (
           <div className="space-y-3">
             <input type="file" accept="image/*" onChange={(e) => updateFile(question.id, e)} />
+            <SymbolToolbar onInsert={insertSymbolIntoActiveAnswer} />
             <textarea
+              ref={(element) => setInputRef(`${question.id}:text`, element)}
+              onFocus={() => markActiveInput(`${question.id}:text`)}
               className="min-h-[100px] w-full rounded-2xl border border-slate-200 px-4 py-3"
               value={draft.textAnswer || ""}
               onChange={(e) => updateDraft(question.id, { textAnswer: e.target.value })}
@@ -491,12 +561,17 @@ export default function AssignmentPage() {
       case QUESTION_TYPES.TEXT:
       default:
         return (
-          <textarea
-            className="min-h-[120px] w-full rounded-2xl border border-slate-200 px-4 py-3"
-            value={draft.textAnswer || ""}
-            onChange={(e) => updateDraft(question.id, { textAnswer: e.target.value })}
-            placeholder="请输入文本答案"
-          />
+          <div className="space-y-3">
+            <SymbolToolbar onInsert={insertSymbolIntoActiveAnswer} />
+            <textarea
+              ref={(element) => setInputRef(`${question.id}:text`, element)}
+              onFocus={() => markActiveInput(`${question.id}:text`)}
+              className="min-h-[120px] w-full rounded-2xl border border-slate-200 px-4 py-3"
+              value={draft.textAnswer || ""}
+              onChange={(e) => updateDraft(question.id, { textAnswer: e.target.value })}
+              placeholder="请输入文本答案"
+            />
+          </div>
         );
     }
   }

@@ -1,8 +1,9 @@
 "use client";
 
 import Link from "next/link";
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { useParams, useRouter } from "next/navigation";
+import { SymbolToolbar } from "@/components/symbol-toolbar";
 import {
   QUESTION_TYPES,
   type AssignmentQuestionInput,
@@ -140,6 +141,60 @@ export default function ClassDetailPage() {
   const [publishingAssignment, setPublishingAssignment] = useState(false);
   const [deletingTemplateId, setDeletingTemplateId] = useState<string | null>(null);
   const [publishingTemplateId, setPublishingTemplateId] = useState<string | null>(null);
+  const editorRefs = useRef<Record<string, HTMLInputElement | HTMLTextAreaElement | null>>({});
+  const activeEditorKeyRef = useRef<string | null>(null);
+
+  function setEditorRef(key: string, element: HTMLInputElement | HTMLTextAreaElement | null) {
+    editorRefs.current[key] = element;
+  }
+
+  function markActiveEditor(key: string) {
+    activeEditorKeyRef.current = key;
+  }
+
+  function insertIntoEditorValue(
+    currentValue: string,
+    symbol: string,
+    key: string,
+    applyValue: (nextValue: string) => void
+  ) {
+    const target = editorRefs.current[key];
+    const start = target?.selectionStart ?? currentValue.length;
+    const end = target?.selectionEnd ?? currentValue.length;
+    const nextValue = `${currentValue.slice(0, start)}${symbol}${currentValue.slice(end)}`;
+    const nextCaret = start + symbol.length;
+
+    applyValue(nextValue);
+
+    requestAnimationFrame(() => {
+      const nextTarget = editorRefs.current[key];
+      nextTarget?.focus();
+      nextTarget?.setSelectionRange(nextCaret, nextCaret);
+    });
+  }
+
+  function insertSymbolIntoEditor(symbol: string) {
+    const activeKey = activeEditorKeyRef.current;
+    if (!activeKey) {
+      return;
+    }
+
+    const [indexText, field] = activeKey.split(":");
+    const index = Number(indexText);
+    const question = questions[index];
+    if (!question) {
+      return;
+    }
+
+    const fieldValue = question[field as keyof DraftQuestion];
+    if (typeof fieldValue !== "string") {
+      return;
+    }
+
+    insertIntoEditorValue(fieldValue, symbol, activeKey, (nextValue) => {
+      updateQuestion(index, field as keyof DraftQuestion, nextValue);
+    });
+  }
 
   const totalScore = useMemo(
     () => questions.reduce((sum, item) => sum + Number(item.maxScore || 0), 0),
@@ -571,11 +626,15 @@ export default function ClassDetailPage() {
                     </p>
 
                     <textarea
+                      ref={(element) => setEditorRef(`${index}:prompt`, element)}
+                      onFocus={() => markActiveEditor(`${index}:prompt`)}
                       className="mt-4 min-h-[120px] w-full rounded-2xl border border-slate-200 px-4 py-3"
                       value={question.prompt}
                       onChange={(e) => updateQuestion(index, "prompt", e.target.value)}
                       placeholder="题目内容"
                     />
+
+                    <SymbolToolbar onInsert={insertSymbolIntoEditor} className="mt-4" />
 
                     <div className="mt-4 grid gap-4 md:grid-cols-2">
                       <label className="space-y-2">
@@ -622,6 +681,8 @@ export default function ClassDetailPage() {
                         placeholder="分值"
                       />
                       <input
+                        ref={(element) => setEditorRef(`${index}:referenceAnswer`, element)}
+                        onFocus={() => markActiveEditor(`${index}:referenceAnswer`)}
                         className="rounded-2xl border border-slate-200 px-4 py-3"
                         value={question.referenceAnswer}
                         onChange={(e) => updateQuestion(index, "referenceAnswer", e.target.value)}
@@ -630,6 +691,8 @@ export default function ClassDetailPage() {
                     </div>
 
                     <textarea
+                      ref={(element) => setEditorRef(`${index}:gradingRubric`, element)}
+                      onFocus={() => markActiveEditor(`${index}:gradingRubric`)}
                       className="mt-4 min-h-[100px] w-full rounded-2xl border border-slate-200 px-4 py-3"
                       value={question.gradingRubric}
                       onChange={(e) => updateQuestion(index, "gradingRubric", e.target.value)}
