@@ -63,6 +63,7 @@ export default function DashboardPage() {
   async function handleCreateClass(e: FormEvent) {
     e.preventDefault();
     setError("");
+
     const res = await fetch("/api/classes", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -80,6 +81,7 @@ export default function DashboardPage() {
   async function handleJoinClass(e: FormEvent) {
     e.preventDefault();
     setError("");
+
     const res = await fetch("/api/classes/join", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -121,25 +123,48 @@ export default function DashboardPage() {
           <Link href="/" className="portal-button-secondary">
             返回课程门户
           </Link>
+          {user.role === "TEACHER" ? (
+            <Link href="/assignment-library" className="portal-button-secondary">
+              进入作业库
+            </Link>
+          ) : null}
           <button type="button" className="portal-button-primary" onClick={logout}>
             退出登录
           </button>
         </div>
       </header>
 
+      {user.role === "TEACHER" ? (
+        <section className="portal-card p-6">
+          <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+            <div>
+              <h2 className="portal-section-title">教师作业库入口</h2>
+              <p className="mt-1 text-sm text-slate-600">
+                统一查看全部历史作业模板，选择班级并设定截止时间后再发布，适合课前备课和跨学期复用。
+              </p>
+            </div>
+            <Link href="/assignment-library" className="portal-button-primary">
+              打开作业库
+            </Link>
+          </div>
+        </section>
+      ) : null}
+
       <section className="grid gap-6 lg:grid-cols-[1.2fr_0.8fr]">
         <div className="portal-card p-6">
-          <h2 className="portal-section-title mb-3">{user.role === "TEACHER" ? "创建授课班级" : "加入课程班级"}</h2>
+          <h2 className="portal-section-title mb-3">
+            {user.role === "TEACHER" ? "创建授课班级" : "加入课程班级"}
+          </h2>
           <p className="mb-4 text-sm leading-6 text-slate-600">
             {user.role === "TEACHER"
-              ? "创建班级后，系统会自动生成班级码，便于学生加入。"
+              ? "创建班级后，系统会自动生成班级码，方便学生加入。"
               : "请输入教师提供的班级码，加入对应的课程教学空间。"}
           </p>
           {user.role === "TEACHER" ? (
             <form className="flex gap-2" onSubmit={handleCreateClass}>
               <input
                 className="flex-1"
-                placeholder="请输入班级名称，如：2023级计科1班"
+                placeholder="请输入班级名称，例如：2023级计算机 1 班"
                 value={className}
                 onChange={(e) => setClassName(e.target.value)}
                 required
@@ -191,9 +216,9 @@ export default function DashboardPage() {
                 <p className="font-medium">{item.name}</p>
                 <p className="text-sm text-slate-600">
                   班级码：{item.code}
-                  {item._count ? ` ｜ 作业数：${item._count.assignments || 0}` : ""}
-                  {item._count ? ` ｜ 学生数：${item._count.members || 0}` : ""}
-                  {item.teacher ? ` ｜ 任课教师：${item.teacher.name}` : ""}
+                  {item._count ? ` · 作业数：${item._count.assignments || 0}` : ""}
+                  {item._count ? ` · 学生数：${item._count.members || 0}` : ""}
+                  {item.teacher ? ` · 任课教师：${item.teacher.name}` : ""}
                 </p>
               </Link>
             ))}

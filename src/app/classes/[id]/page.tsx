@@ -502,9 +502,14 @@ export default function ClassDetailPage() {
             班级码：{classInfo?.code} | 任课教师：{classInfo?.teacher.name}
           </p>
         </div>
-        <Link href="/dashboard" className="text-sm font-medium text-blue-600">
-          返回工作台
-        </Link>
+        <div className="flex flex-wrap gap-3">
+          <Link href="/assignment-library" className="text-sm font-medium text-teal-700">
+            打开作业库
+          </Link>
+          <Link href="/dashboard" className="text-sm font-medium text-blue-600">
+            返回工作台
+          </Link>
+        </div>
       </div>
 
       <section className="grid gap-4 md:grid-cols-3">
