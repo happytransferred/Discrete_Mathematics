@@ -140,6 +140,7 @@ export default function ClassDetailPage() {
   const [savingTemplate, setSavingTemplate] = useState(false);
   const [publishingAssignment, setPublishingAssignment] = useState(false);
   const [deletingTemplateId, setDeletingTemplateId] = useState<string | null>(null);
+  const [deletingAssignmentId, setDeletingAssignmentId] = useState<string | null>(null);
   const [publishingTemplateId, setPublishingTemplateId] = useState<string | null>(null);
   const editorRefs = useRef<Record<string, HTMLInputElement | HTMLTextAreaElement | null>>({});
   const activeEditorKeyRef = useRef<string | null>(null);
@@ -457,6 +458,44 @@ export default function ClassDetailPage() {
       setError("网络异常，请稍后重试。");
     } finally {
       setDeletingTemplateId(null);
+    }
+  }
+
+  async function deleteAssignment(assignmentId: string) {
+    if (!window.confirm("删除后该作业及其学生提交记录将一并移除，确认继续吗？")) {
+      return;
+    }
+
+    setDeletingAssignmentId(assignmentId);
+    setError("");
+
+    try {
+      const res = await fetch(`/api/assignments/${assignmentId}`, {
+        method: "DELETE"
+      });
+      const data = await res.json();
+
+      if (!res.ok) {
+        setError(data.error || "删除作业失败。");
+        return;
+      }
+
+      setAssignments((current) => current.filter((item) => item.id !== assignmentId));
+      setClassInfo((current) =>
+        current
+          ? {
+              ...current,
+              _count: {
+                ...current._count,
+                assignments: Math.max(0, current._count.assignments - 1)
+              }
+            }
+          : current
+      );
+    } catch {
+      setError("网络异常，请稍后重试。");
+    } finally {
+      setDeletingAssignmentId(null);
     }
   }
 
@@ -860,6 +899,16 @@ export default function ClassDetailPage() {
                     <Link href={`/assignments/${assignment.id}`} className="mt-3 inline-block text-sm font-medium text-blue-600">
                       查看作业详情
                     </Link>
+                    {user?.role === "TEACHER" ? (
+                      <button
+                        type="button"
+                        onClick={() => deleteAssignment(assignment.id)}
+                        disabled={deletingAssignmentId === assignment.id}
+                        className="mt-3 block w-full text-right text-sm font-medium text-red-600 disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        {deletingAssignmentId === assignment.id ? "删除中..." : "删除作业"}
+                      </button>
+                    ) : null}
                   </div>
                 </div>
               </article>

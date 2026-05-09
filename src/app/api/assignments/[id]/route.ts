@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { formatQuestion } from "@/lib/assignment-format";
-import { requireAuth } from "@/lib/auth";
+import { requireAuth, requireRole } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { Role } from "@/lib/roles";
 
@@ -57,4 +57,33 @@ export async function GET(req: NextRequest, context: { params: { id: string } })
       questions: assignment.questions.map((question) => formatQuestion(question, includeReference))
     }
   });
+}
+
+export async function DELETE(req: NextRequest, context: { params: { id: string } }) {
+  const auth = await requireRole(req, Role.TEACHER);
+  if ("error" in auth) {
+    return NextResponse.json({ error: auth.error }, { status: auth.status });
+  }
+
+  const assignmentId = context.params.id;
+  const assignment = await prisma.assignment.findUnique({
+    where: { id: assignmentId },
+    include: {
+      class: true
+    }
+  });
+
+  if (!assignment) {
+    return NextResponse.json({ error: "作业不存在。" }, { status: 404 });
+  }
+
+  if (assignment.class.teacherId !== auth.user.id) {
+    return NextResponse.json({ error: "无权删除该作业。" }, { status: 403 });
+  }
+
+  await prisma.assignment.delete({
+    where: { id: assignmentId }
+  });
+
+  return NextResponse.json({ success: true });
 }
