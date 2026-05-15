@@ -341,6 +341,76 @@ async function callCompatibleChatCompletion(args: {
   };
 }
 
+function extractMessageText(content: string | Array<{ text?: string }> | undefined) {
+  if (typeof content === "string") {
+    return content;
+  }
+  if (Array.isArray(content)) {
+    return content.map((item) => item.text || "").join("");
+  }
+  return "";
+}
+
+async function callVisionTranscription(args: {
+  config: ProviderConfig;
+  questionTitle: string;
+  questionPrompt?: string | null;
+  imageDataUrl: string;
+}) {
+  const response = await fetchWithTimeout(`${args.config.baseUrl}/chat/completions`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${args.config.apiKey}`
+    },
+    body: JSON.stringify({
+      model: args.config.model,
+      temperature: 0.1,
+      messages: [
+        {
+          role: "system",
+          content:
+            "你是一名离散数学助教。请先识别学生手写或截图中的答案内容，再整理成尽量忠实、清晰的中文文本。保留逻辑符号、集合符号、编号和换行；不要评分；如果某些字句看不清，请用[无法识别]标记。只输出整理后的答案文本。"
+        },
+        {
+          role: "user",
+          content: [
+            {
+              type: "text",
+              text: [
+                `题目标题：${args.questionTitle}`,
+                args.questionPrompt ? `题目内容：${args.questionPrompt}` : null,
+                "请识别这张学生答案图片，并输出一版可编辑文本。"
+              ]
+                .filter(Boolean)
+                .join("\n")
+            },
+            {
+              type: "image_url",
+              image_url: {
+                url: args.imageDataUrl
+              }
+            }
+          ]
+        }
+      ]
+    })
+  });
+
+  if (!response.ok) {
+    throw new Error(`Vision transcription failed: ${response.status}`);
+  }
+
+  const payload = (await response.json()) as {
+    choices?: Array<{ message?: { content?: string | Array<{ text?: string }> } }>;
+  };
+  const text = extractMessageText(payload.choices?.[0]?.message?.content).trim();
+  if (!text) {
+    throw new Error("Vision transcription missing content");
+  }
+  return text;
+}
+
 async function callOpenAiResponses(args: {
   config: ProviderConfig;
   assignmentTitle: string;
@@ -593,4 +663,25 @@ export async function gradeHomework(input: GradeInput): Promise<GradingResult> {
     checks,
     suggestions: results.flatMap((item) => item.suggestions)
   };
+}
+
+export async function recognizeAnswerImage(args: {
+  questionTitle: string;
+  questionPrompt?: string | null;
+  imageDataUrl: string;
+}) {
+  const config = getProviderConfig();
+  if (!config || !config.apiKey) {
+    throw new Error("AI service is not configured");
+  }
+  if (!config.supportsVision) {
+    throw new Error("Current AI provider does not support image recognition");
+  }
+
+  return callVisionTranscription({
+    config,
+    questionTitle: args.questionTitle,
+    questionPrompt: args.questionPrompt,
+    imageDataUrl: args.imageDataUrl
+  });
 }

@@ -33,7 +33,7 @@ type Assignment = {
 type SubmissionView = {
   id: string;
   attemptNumber: number;
-  gradingStatus: string;
+  gradingStatus: "PENDING" | "AI_GRADED" | "TEACHER_REVIEWED" | string;
   aiSummary?: string | null;
   overallScore: number;
   maxScore: number;
@@ -97,7 +97,7 @@ function questionTypeLabel(type: string) {
     case QUESTION_TYPES.PROOF:
       return "证明题";
     case QUESTION_TYPES.IMAGE:
-      return "图片补充题";
+      return "图片识别题";
     default:
       return type;
   }
@@ -126,6 +126,9 @@ export default function AssignmentPage() {
   const [submissions, setSubmissions] = useState<SubmissionView[]>([]);
   const [draftAnswers, setDraftAnswers] = useState<Record<string, StudentAnswerDraft>>({});
   const [draftFiles, setDraftFiles] = useState<Record<string, File | null>>({});
+  const [imageAnswerDrafts, setImageAnswerDrafts] = useState<Record<string, string>>({});
+  const [imageAnswerConfirmed, setImageAnswerConfirmed] = useState<Record<string, boolean>>({});
+  const [recognizingQuestionId, setRecognizingQuestionId] = useState<string | null>(null);
   const [reviewDrafts, setReviewDrafts] = useState<Record<string, ReviewState>>({});
   const [reviewingId, setReviewingId] = useState<string | null>(null);
   const [error, setError] = useState("");
@@ -170,12 +173,24 @@ export default function AssignmentPage() {
     }
 
     const [questionId, mode, indexText] = activeKey.split(":");
-    const draft = draftAnswers[questionId] || buildEmptyDraft(assignment.questions.find((item) => item.id === questionId)!);
+    const question = assignment.questions.find((item) => item.id === questionId);
+    if (!question) {
+      return;
+    }
+
+    const draft = draftAnswers[questionId] || buildEmptyDraft(question);
 
     if (mode === "text") {
-      insertIntoControlledValue(draft.textAnswer || "", symbol, activeKey, (nextValue) => {
-        updateDraft(questionId, { textAnswer: nextValue });
-      });
+      if (question.type === QUESTION_TYPES.IMAGE) {
+        const currentValue = imageAnswerDrafts[questionId] ?? draft.textAnswer ?? "";
+        insertIntoControlledValue(currentValue, symbol, activeKey, (nextValue) => {
+          updateImageAnswerDraft(questionId, nextValue);
+        });
+      } else {
+        insertIntoControlledValue(draft.textAnswer || "", symbol, activeKey, (nextValue) => {
+          updateDraft(questionId, { textAnswer: nextValue });
+        });
+      }
       return;
     }
 
@@ -203,12 +218,10 @@ export default function AssignmentPage() {
 
   async function triggerBackgroundGrading(submissionId: string) {
     try {
-      await fetch(`/api/submissions/${submissionId}/grade`, {
-        method: "POST"
-      });
+      await fetch(`/api/submissions/${submissionId}/grade`, { method: "POST" });
       await refreshStudentSubmissions();
     } catch {
-      // 留给前端轮询继续处理
+      // 交给前端轮询继续刷新
     }
   }
 
@@ -285,6 +298,32 @@ export default function AssignmentPage() {
   }, [assignment, user?.role]);
 
   useEffect(() => {
+    if (!assignment || user?.role !== "STUDENT") {
+      return;
+    }
+
+    setImageAnswerDrafts((current) => {
+      const next = { ...current };
+      for (const question of assignment.questions) {
+        if (question.type === QUESTION_TYPES.IMAGE && !(question.id in next)) {
+          next[question.id] = draftAnswers[question.id]?.textAnswer || "";
+        }
+      }
+      return next;
+    });
+
+    setImageAnswerConfirmed((current) => {
+      const next = { ...current };
+      for (const question of assignment.questions) {
+        if (question.type === QUESTION_TYPES.IMAGE && !(question.id in next)) {
+          next[question.id] = Boolean(draftAnswers[question.id]?.textAnswer?.trim());
+        }
+      }
+      return next;
+    });
+  }, [assignment, draftAnswers, user?.role]);
+
+  useEffect(() => {
     if (user?.role !== "STUDENT" || !latestSubmission || latestSubmission.gradingStatus !== "PENDING") {
       return;
     }
@@ -322,6 +361,70 @@ export default function AssignmentPage() {
       ...current,
       [questionId]: e.target.files?.[0] || null
     }));
+    setImageAnswerConfirmed((current) => ({
+      ...current,
+      [questionId]: false
+    }));
+  }
+
+  function updateImageAnswerDraft(questionId: string, value: string) {
+    setImageAnswerDrafts((current) => ({
+      ...current,
+      [questionId]: value
+    }));
+    setImageAnswerConfirmed((current) => ({
+      ...current,
+      [questionId]: false
+    }));
+  }
+
+  function confirmImageAnswer(questionId: string) {
+    const value = (imageAnswerDrafts[questionId] ?? "").trim();
+    updateDraft(questionId, { textAnswer: value });
+    setImageAnswerConfirmed((current) => ({
+      ...current,
+      [questionId]: true
+    }));
+  }
+
+  async function recognizeImageAnswer(question: AssignmentQuestionView) {
+    const file = draftFiles[question.id];
+    if (!file) {
+      setError("请先为该题上传答案图片。");
+      return;
+    }
+
+    setRecognizingQuestionId(question.id);
+    setError("");
+    try {
+      const formData = new FormData();
+      formData.set("questionTitle", question.title);
+      formData.set("questionPrompt", question.prompt);
+      formData.set("image", file);
+
+      const res = await fetch("/api/submissions/recognize", {
+        method: "POST",
+        body: formData
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data.error || "图片识别失败，请稍后重试。");
+        return;
+      }
+
+      setImageAnswerDrafts((current) => ({
+        ...current,
+        [question.id]: data.text || ""
+      }));
+      setImageAnswerConfirmed((current) => ({
+        ...current,
+        [question.id]: false
+      }));
+    } catch {
+      setError("网络异常，请稍后重试。");
+    } finally {
+      setRecognizingQuestionId(null);
+    }
   }
 
   function toggleMultipleChoice(questionId: string, option: string, checked: boolean) {
@@ -358,6 +461,20 @@ export default function AssignmentPage() {
       return;
     }
 
+    const unconfirmedImageQuestion = assignment.questions.find((question) => {
+      if (question.type !== QUESTION_TYPES.IMAGE) {
+        return false;
+      }
+      const workingDraft = (imageAnswerDrafts[question.id] ?? "").trim();
+      const finalAnswer = (draftAnswers[question.id]?.textAnswer || "").trim();
+      return workingDraft.length > 0 && workingDraft !== finalAnswer;
+    });
+
+    if (unconfirmedImageQuestion) {
+      setError(`请先确认“${unconfirmedImageQuestion.title}”的识别文本，再提交作业。`);
+      return;
+    }
+
     setPending(true);
     setError("");
 
@@ -386,6 +503,7 @@ export default function AssignmentPage() {
       setLatestSubmission(data.submission);
       setSubmissionHistory((current) => [data.submission, ...current]);
       setDraftFiles({});
+      setImageAnswerConfirmed({});
       void triggerBackgroundGrading(data.submission.id);
     } catch {
       setError("网络异常，请稍后重试。");
@@ -530,7 +648,7 @@ export default function AssignmentPage() {
                   className="min-h-[100px] w-full rounded-2xl border border-slate-200 px-4 py-3"
                   value={step}
                   onChange={(e) => updateProofStep(question.id, index, e.target.value)}
-                  placeholder="请输入这一证明步骤。"
+                  placeholder="请输入这一步证明内容。"
                 />
               </div>
             ))}
@@ -547,15 +665,40 @@ export default function AssignmentPage() {
         return (
           <div className="space-y-3">
             <input type="file" accept="image/*" onChange={(e) => updateFile(question.id, e)} />
+            <div className="flex flex-wrap items-center gap-3">
+              <button
+                type="button"
+                onClick={() => recognizeImageAnswer(question)}
+                disabled={recognizingQuestionId === question.id || !draftFiles[question.id]}
+                className="rounded-full border border-slate-300 px-4 py-2 text-sm text-slate-700 disabled:opacity-60"
+              >
+                {recognizingQuestionId === question.id ? "识别中..." : "识别图片答案"}
+              </button>
+              {imageAnswerConfirmed[question.id] ? (
+                <span className="text-sm text-emerald-700">已确认，这版文字会作为最终答案提交。</span>
+              ) : (
+                <span className="text-sm text-slate-500">识别后可手动修改，再点击“确认识别为答案”。</span>
+              )}
+            </div>
             <SymbolToolbar onInsert={insertSymbolIntoActiveAnswer} />
             <textarea
               ref={(element) => setInputRef(`${question.id}:text`, element)}
               onFocus={() => markActiveInput(`${question.id}:text`)}
-              className="min-h-[100px] w-full rounded-2xl border border-slate-200 px-4 py-3"
-              value={draft.textAnswer || ""}
-              onChange={(e) => updateDraft(question.id, { textAnswer: e.target.value })}
-              placeholder="可选：补充文字说明，帮助教师理解你的图片答案。"
+              className="min-h-[120px] w-full rounded-2xl border border-slate-200 px-4 py-3"
+              value={imageAnswerDrafts[question.id] ?? draft.textAnswer ?? ""}
+              onChange={(e) => updateImageAnswerDraft(question.id, e.target.value)}
+              placeholder="先上传图片并识别；如果识别不准确，可在这里手动修改文本。"
             />
+            <div className="flex flex-wrap items-center gap-3">
+              <button
+                type="button"
+                onClick={() => confirmImageAnswer(question.id)}
+                className="rounded-full bg-slate-900 px-4 py-2 text-sm font-medium text-white"
+              >
+                确认识别为答案
+              </button>
+              <span className="text-sm text-slate-500">只有确认后的文字，才会作为最终答案保存并提交。</span>
+            </div>
           </div>
         );
       case QUESTION_TYPES.TEXT:
@@ -605,7 +748,7 @@ export default function AssignmentPage() {
           <div className="space-y-3">
             {answer.textAnswer ? <p className="whitespace-pre-wrap text-sm text-slate-700">{answer.textAnswer}</p> : null}
             {answer.imagePath ? (
-              <img src={answer.imagePath} alt={`${answer.questionTitle} 学生作答图片`} className="max-h-72 rounded-2xl border border-slate-200" />
+              <img src={answer.imagePath} alt={`${answer.questionTitle} 学生答案图片`} className="max-h-72 rounded-2xl border border-slate-200" />
             ) : (
               <p className="text-sm text-slate-500">未上传图片。</p>
             )}
@@ -663,9 +806,7 @@ export default function AssignmentPage() {
                   <img src={question.promptImagePath} alt={`${question.title} 题面图片`} className="mt-4 max-h-72 rounded-2xl border border-slate-200" />
                 ) : null}
                 {user?.role === "TEACHER" && question.gradingRubric ? (
-                  <p className="mt-4 rounded-2xl bg-slate-50 px-4 py-3 text-sm text-slate-700">
-                    评分 rubric：{question.gradingRubric}
-                  </p>
+                  <p className="mt-4 rounded-2xl bg-slate-50 px-4 py-3 text-sm text-slate-700">评分 rubric：{question.gradingRubric}</p>
                 ) : null}
                 {user?.role === "TEACHER" && (question.referenceAnswer || question.referenceImagePath) ? (
                   <div className="mt-4 rounded-2xl bg-slate-50 p-4">
@@ -673,11 +814,7 @@ export default function AssignmentPage() {
                       <p className="whitespace-pre-wrap text-sm text-slate-700">参考答案：{question.referenceAnswer}</p>
                     ) : null}
                     {question.referenceImagePath ? (
-                      <img
-                        src={question.referenceImagePath}
-                        alt={`${question.title} 参考答案图片`}
-                        className="mt-4 max-h-72 rounded-2xl border border-slate-200"
-                      />
+                      <img src={question.referenceImagePath} alt={`${question.title} 参考答案图片`} className="mt-4 max-h-72 rounded-2xl border border-slate-200" />
                     ) : null}
                   </div>
                 ) : null}
@@ -745,7 +882,7 @@ export default function AssignmentPage() {
                     <div className="text-right">
                       <p className="text-2xl font-semibold">
                         {latestSubmission.gradingStatus === "PENDING"
-                          ? "-- / " + latestSubmission.maxScore
+                          ? `-- / ${latestSubmission.maxScore}`
                           : `${latestSubmission.overallScore}/${latestSubmission.maxScore}`}
                       </p>
                       <p className="text-sm text-slate-500">{gradingStatusLabel(latestSubmission.gradingStatus)}</p>
@@ -781,10 +918,10 @@ export default function AssignmentPage() {
                     <div className="mt-4 space-y-3">
                       {submissionHistory.slice(1).map((submission) => (
                         <div key={submission.id} className="rounded-2xl bg-slate-50 px-4 py-3 text-sm text-slate-700">
-                          第 {submission.attemptNumber} 次 |{" "}
-                          {submission.gradingStatus === "PENDING"
-                            ? "评分中"
-                            : `${submission.overallScore}/${submission.maxScore} 分`}{" "}
+                          第 {submission.attemptNumber} 次 |
+                          {" "}
+                          {submission.gradingStatus === "PENDING" ? "评分中" : `${submission.overallScore}/${submission.maxScore} 分`}
+                          {" "}
                           | {formatDateTime(submission.createdAt)}
                         </div>
                       ))}
@@ -825,13 +962,9 @@ export default function AssignmentPage() {
                       </div>
                       <div className="text-right">
                         <p className="text-2xl font-semibold">
-                          {submission.gradingStatus === "PENDING"
-                            ? "-- / " + submission.maxScore
-                            : `${submission.overallScore}/${submission.maxScore}`}
+                          {submission.gradingStatus === "PENDING" ? `-- / ${submission.maxScore}` : `${submission.overallScore}/${submission.maxScore}`}
                         </p>
-                        {submission.reviewedAt ? (
-                          <p className="text-sm text-slate-500">复核时间：{formatDateTime(submission.reviewedAt)}</p>
-                        ) : null}
+                        {submission.reviewedAt ? <p className="text-sm text-slate-500">复核时间：{formatDateTime(submission.reviewedAt)}</p> : null}
                       </div>
                     </div>
 
