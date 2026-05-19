@@ -97,7 +97,7 @@ function questionTypeLabel(type: string) {
     case QUESTION_TYPES.PROOF:
       return "证明题";
     case QUESTION_TYPES.IMAGE:
-      return "图片识别题";
+      return "图片题";
     default:
       return type;
   }
@@ -112,6 +112,54 @@ function buildEmptyDraft(question: AssignmentQuestionView): StudentAnswerDraft {
     selectedOptions: [],
     stepAnswers: question.type === QUESTION_TYPES.PROOF ? [""] : []
   };
+}
+
+function normalizeText(value: string | null | undefined) {
+  return (value || "").trim();
+}
+
+function splitLinesToSteps(value: string) {
+  const steps = value
+    .split(/\r?\n/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+  return steps.length > 0 ? steps : [value.trim()].filter(Boolean);
+}
+
+function inferSingleChoice(text: string, options: string[]) {
+  const normalized = text.trim().toLowerCase();
+  if (!normalized) {
+    return "";
+  }
+
+  const letterMatch = normalized.match(/\b([a-z])\b/);
+  if (letterMatch) {
+    const index = letterMatch[1].charCodeAt(0) - 97;
+    if (index >= 0 && index < options.length) {
+      return options[index];
+    }
+  }
+
+  const matched = options.find((option) => normalized.includes(option.trim().toLowerCase()));
+  return matched || "";
+}
+
+function inferMultipleChoice(text: string, options: string[]) {
+  const normalized = text.trim().toLowerCase();
+  if (!normalized) {
+    return [];
+  }
+
+  const letters = Array.from(new Set((normalized.match(/[a-z]/g) || []).map((char) => char.toLowerCase())));
+  const mappedByLetters = letters
+    .map((char) => {
+      const index = char.charCodeAt(0) - 97;
+      return index >= 0 && index < options.length ? options[index] : null;
+    })
+    .filter((item): item is string => Boolean(item));
+
+  const mappedByText = options.filter((option) => normalized.includes(option.trim().toLowerCase()));
+  return Array.from(new Set([...mappedByLetters, ...mappedByText]));
 }
 
 export default function AssignmentPage() {
@@ -180,17 +228,18 @@ export default function AssignmentPage() {
 
     const draft = draftAnswers[questionId] || buildEmptyDraft(question);
 
+    if (mode === "image-draft") {
+      const currentValue = imageAnswerDrafts[questionId] ?? "";
+      insertIntoControlledValue(currentValue, symbol, activeKey, (nextValue) => {
+        updateImageAnswerDraft(questionId, nextValue);
+      });
+      return;
+    }
+
     if (mode === "text") {
-      if (question.type === QUESTION_TYPES.IMAGE) {
-        const currentValue = imageAnswerDrafts[questionId] ?? draft.textAnswer ?? "";
-        insertIntoControlledValue(currentValue, symbol, activeKey, (nextValue) => {
-          updateImageAnswerDraft(questionId, nextValue);
-        });
-      } else {
-        insertIntoControlledValue(draft.textAnswer || "", symbol, activeKey, (nextValue) => {
-          updateDraft(questionId, { textAnswer: nextValue });
-        });
-      }
+      insertIntoControlledValue(draft.textAnswer || "", symbol, activeKey, (nextValue) => {
+        updateDraft(questionId, { textAnswer: nextValue });
+      });
       return;
     }
 
@@ -221,7 +270,7 @@ export default function AssignmentPage() {
       await fetch(`/api/submissions/${submissionId}/grade`, { method: "POST" });
       await refreshStudentSubmissions();
     } catch {
-      // 交给前端轮询继续刷新
+      // 留给前端轮询继续刷新
     }
   }
 
@@ -305,7 +354,7 @@ export default function AssignmentPage() {
     setImageAnswerDrafts((current) => {
       const next = { ...current };
       for (const question of assignment.questions) {
-        if (question.type === QUESTION_TYPES.IMAGE && !(question.id in next)) {
+        if (!(question.id in next)) {
           next[question.id] = draftAnswers[question.id]?.textAnswer || "";
         }
       }
@@ -315,8 +364,8 @@ export default function AssignmentPage() {
     setImageAnswerConfirmed((current) => {
       const next = { ...current };
       for (const question of assignment.questions) {
-        if (question.type === QUESTION_TYPES.IMAGE && !(question.id in next)) {
-          next[question.id] = Boolean(draftAnswers[question.id]?.textAnswer?.trim());
+        if (!(question.id in next)) {
+          next[question.id] = false;
         }
       }
       return next;
@@ -378,12 +427,24 @@ export default function AssignmentPage() {
     }));
   }
 
-  function confirmImageAnswer(questionId: string) {
-    const value = (imageAnswerDrafts[questionId] ?? "").trim();
-    updateDraft(questionId, { textAnswer: value });
+  function confirmImageAnswer(question: AssignmentQuestionView) {
+    const value = normalizeText(imageAnswerDrafts[question.id]);
+    const patch: Partial<StudentAnswerDraft> = { textAnswer: value };
+
+    if (question.type === QUESTION_TYPES.CHOICE) {
+      patch.selectedOption = inferSingleChoice(value, question.options);
+    }
+    if (question.type === QUESTION_TYPES.MULTIPLE_CHOICE) {
+      patch.selectedOptions = inferMultipleChoice(value, question.options);
+    }
+    if (question.type === QUESTION_TYPES.PROOF) {
+      patch.stepAnswers = splitLinesToSteps(value);
+    }
+
+    updateDraft(question.id, patch);
     setImageAnswerConfirmed((current) => ({
       ...current,
-      [questionId]: true
+      [question.id]: true
     }));
   }
 
@@ -396,6 +457,7 @@ export default function AssignmentPage() {
 
     setRecognizingQuestionId(question.id);
     setError("");
+
     try {
       const formData = new FormData();
       formData.set("questionTitle", question.title);
@@ -462,11 +524,8 @@ export default function AssignmentPage() {
     }
 
     const unconfirmedImageQuestion = assignment.questions.find((question) => {
-      if (question.type !== QUESTION_TYPES.IMAGE) {
-        return false;
-      }
-      const workingDraft = (imageAnswerDrafts[question.id] ?? "").trim();
-      const finalAnswer = (draftAnswers[question.id]?.textAnswer || "").trim();
+      const workingDraft = normalizeText(imageAnswerDrafts[question.id]);
+      const finalAnswer = normalizeText(draftAnswers[question.id]?.textAnswer);
       return workingDraft.length > 0 && workingDraft !== finalAnswer;
     });
 
@@ -577,39 +636,90 @@ export default function AssignmentPage() {
     }
   }
 
+  function renderImageAssist(question: AssignmentQuestionView) {
+    return (
+      <div className="mt-4 rounded-2xl border border-dashed border-slate-300 bg-slate-50 p-4 space-y-3">
+        <div className="flex flex-wrap items-center gap-3">
+          <span className="text-sm font-medium text-slate-700">拍照辅助作答</span>
+          <input type="file" accept="image/*" onChange={(e) => updateFile(question.id, e)} />
+        </div>
+        <div className="flex flex-wrap items-center gap-3">
+          <button
+            type="button"
+            onClick={() => recognizeImageAnswer(question)}
+            disabled={recognizingQuestionId === question.id || !draftFiles[question.id]}
+            className="rounded-full border border-slate-300 px-4 py-2 text-sm text-slate-700 disabled:opacity-60"
+          >
+            {recognizingQuestionId === question.id ? "识别中..." : "识别图片答案"}
+          </button>
+          {imageAnswerConfirmed[question.id] ? (
+            <span className="text-sm text-emerald-700">已确认，这版文字会作为最终答案提交。</span>
+          ) : (
+            <span className="text-sm text-slate-500">识别后可手动修改，再点击“确认识别为答案”。</span>
+          )}
+        </div>
+        <SymbolToolbar onInsert={insertSymbolIntoActiveAnswer} />
+        <textarea
+          ref={(element) => setInputRef(`${question.id}:image-draft`, element)}
+          onFocus={() => markActiveInput(`${question.id}:image-draft`)}
+          className="min-h-[120px] w-full rounded-2xl border border-slate-200 px-4 py-3 bg-white"
+          value={imageAnswerDrafts[question.id] ?? ""}
+          onChange={(e) => updateImageAnswerDraft(question.id, e.target.value)}
+          placeholder="上传图片并识别后，可在这里手动修正文案。"
+        />
+        <div className="flex flex-wrap items-center gap-3">
+          <button
+            type="button"
+            onClick={() => confirmImageAnswer(question)}
+            className="rounded-full bg-slate-900 px-4 py-2 text-sm font-medium text-white"
+          >
+            确认识别为答案
+          </button>
+          <span className="text-sm text-slate-500">确认后，系统会把这版文字作为最终答案参与 AI 评分。</span>
+        </div>
+      </div>
+    );
+  }
+
   function renderStudentInput(question: AssignmentQuestionView) {
     const draft = draftAnswers[question.id] || buildEmptyDraft(question);
 
     switch (question.type) {
       case QUESTION_TYPES.CHOICE:
         return (
-          <div className="space-y-2">
-            {question.options.map((option) => (
-              <label key={option} className="flex items-center gap-2 text-sm text-slate-700">
-                <input
-                  type="radio"
-                  name={`choice-${question.id}`}
-                  checked={draft.selectedOption === option}
-                  onChange={() => updateDraft(question.id, { selectedOption: option })}
-                />
-                <span>{option}</span>
-              </label>
-            ))}
+          <div className="space-y-3">
+            <div className="space-y-2">
+              {question.options.map((option) => (
+                <label key={option} className="flex items-center gap-2 text-sm text-slate-700">
+                  <input
+                    type="radio"
+                    name={`choice-${question.id}`}
+                    checked={draft.selectedOption === option}
+                    onChange={() => updateDraft(question.id, { selectedOption: option })}
+                  />
+                  <span>{option}</span>
+                </label>
+              ))}
+            </div>
+            {renderImageAssist(question)}
           </div>
         );
       case QUESTION_TYPES.MULTIPLE_CHOICE:
         return (
-          <div className="space-y-2">
-            {question.options.map((option) => (
-              <label key={option} className="flex items-center gap-2 text-sm text-slate-700">
-                <input
-                  type="checkbox"
-                  checked={(draft.selectedOptions || []).includes(option)}
-                  onChange={(e) => toggleMultipleChoice(question.id, option, e.target.checked)}
-                />
-                <span>{option}</span>
-              </label>
-            ))}
+          <div className="space-y-3">
+            <div className="space-y-2">
+              {question.options.map((option) => (
+                <label key={option} className="flex items-center gap-2 text-sm text-slate-700">
+                  <input
+                    type="checkbox"
+                    checked={(draft.selectedOptions || []).includes(option)}
+                    onChange={(e) => toggleMultipleChoice(question.id, option, e.target.checked)}
+                  />
+                  <span>{option}</span>
+                </label>
+              ))}
+            </div>
+            {renderImageAssist(question)}
           </div>
         );
       case QUESTION_TYPES.FILL_BLANK:
@@ -624,6 +734,7 @@ export default function AssignmentPage() {
               onChange={(e) => updateDraft(question.id, { textAnswer: e.target.value })}
               placeholder="请输入答案"
             />
+            {renderImageAssist(question)}
           </div>
         );
       case QUESTION_TYPES.PROOF:
@@ -659,48 +770,10 @@ export default function AssignmentPage() {
             >
               新增步骤
             </button>
+            {renderImageAssist(question)}
           </div>
         );
       case QUESTION_TYPES.IMAGE:
-        return (
-          <div className="space-y-3">
-            <input type="file" accept="image/*" onChange={(e) => updateFile(question.id, e)} />
-            <div className="flex flex-wrap items-center gap-3">
-              <button
-                type="button"
-                onClick={() => recognizeImageAnswer(question)}
-                disabled={recognizingQuestionId === question.id || !draftFiles[question.id]}
-                className="rounded-full border border-slate-300 px-4 py-2 text-sm text-slate-700 disabled:opacity-60"
-              >
-                {recognizingQuestionId === question.id ? "识别中..." : "识别图片答案"}
-              </button>
-              {imageAnswerConfirmed[question.id] ? (
-                <span className="text-sm text-emerald-700">已确认，这版文字会作为最终答案提交。</span>
-              ) : (
-                <span className="text-sm text-slate-500">识别后可手动修改，再点击“确认识别为答案”。</span>
-              )}
-            </div>
-            <SymbolToolbar onInsert={insertSymbolIntoActiveAnswer} />
-            <textarea
-              ref={(element) => setInputRef(`${question.id}:text`, element)}
-              onFocus={() => markActiveInput(`${question.id}:text`)}
-              className="min-h-[120px] w-full rounded-2xl border border-slate-200 px-4 py-3"
-              value={imageAnswerDrafts[question.id] ?? draft.textAnswer ?? ""}
-              onChange={(e) => updateImageAnswerDraft(question.id, e.target.value)}
-              placeholder="先上传图片并识别；如果识别不准确，可在这里手动修改文本。"
-            />
-            <div className="flex flex-wrap items-center gap-3">
-              <button
-                type="button"
-                onClick={() => confirmImageAnswer(question.id)}
-                className="rounded-full bg-slate-900 px-4 py-2 text-sm font-medium text-white"
-              >
-                确认识别为答案
-              </button>
-              <span className="text-sm text-slate-500">只有确认后的文字，才会作为最终答案保存并提交。</span>
-            </div>
-          </div>
-        );
       case QUESTION_TYPES.TEXT:
       default:
         return (
@@ -712,51 +785,44 @@ export default function AssignmentPage() {
               className="min-h-[120px] w-full rounded-2xl border border-slate-200 px-4 py-3"
               value={draft.textAnswer || ""}
               onChange={(e) => updateDraft(question.id, { textAnswer: e.target.value })}
-              placeholder="请输入文本答案"
+              placeholder={question.type === QUESTION_TYPES.IMAGE ? "可直接输入文字答案，也可通过图片识别来辅助填写。" : "请输入文本答案"}
             />
+            {renderImageAssist(question)}
           </div>
         );
     }
   }
 
   function renderAnswerContent(answer: SubmissionAnswerView) {
-    switch (answer.questionType) {
-      case QUESTION_TYPES.CHOICE:
-        return <p className="text-sm text-slate-700">学生选择：{answer.selectedOption || "未作答"}</p>;
-      case QUESTION_TYPES.MULTIPLE_CHOICE:
-        return <p className="text-sm text-slate-700">学生选择：{answer.selectedOptions?.join("、") || "未作答"}</p>;
-      case QUESTION_TYPES.FILL_BLANK:
-      case QUESTION_TYPES.TEXT:
-        return <p className="whitespace-pre-wrap text-sm text-slate-700">{answer.textAnswer || "未作答"}</p>;
-      case QUESTION_TYPES.PROOF:
-        return (
-          <div className="space-y-2">
-            {(answer.stepAnswers || []).length > 0 ? (
-              answer.stepAnswers?.map((item, index) => (
+    return (
+      <div className="space-y-3">
+        {answer.questionType === QUESTION_TYPES.CHOICE ? (
+          <p className="text-sm text-slate-700">学生选择：{answer.selectedOption || "未作答"}</p>
+        ) : null}
+        {answer.questionType === QUESTION_TYPES.MULTIPLE_CHOICE ? (
+          <p className="text-sm text-slate-700">学生选择：{answer.selectedOptions?.join("、") || "未作答"}</p>
+        ) : null}
+        {answer.questionType === QUESTION_TYPES.PROOF ? (
+          (answer.stepAnswers || []).length > 0 ? (
+            <div className="space-y-2">
+              {answer.stepAnswers?.map((item, index) => (
                 <div key={`${answer.id}-${index}`} className="rounded-2xl bg-slate-50 px-3 py-2 text-sm text-slate-700">
                   <span className="font-medium">步骤 {index + 1}：</span>
                   {item}
                 </div>
-              ))
-            ) : (
-              <p className="text-sm text-slate-500">未填写证明步骤。</p>
-            )}
-          </div>
-        );
-      case QUESTION_TYPES.IMAGE:
-        return (
-          <div className="space-y-3">
-            {answer.textAnswer ? <p className="whitespace-pre-wrap text-sm text-slate-700">{answer.textAnswer}</p> : null}
-            {answer.imagePath ? (
-              <img src={answer.imagePath} alt={`${answer.questionTitle} 学生答案图片`} className="max-h-72 rounded-2xl border border-slate-200" />
-            ) : (
-              <p className="text-sm text-slate-500">未上传图片。</p>
-            )}
-          </div>
-        );
-      default:
-        return null;
-    }
+              ))}
+            </div>
+          ) : null
+        ) : null}
+        {answer.textAnswer ? <p className="whitespace-pre-wrap text-sm text-slate-700">{answer.textAnswer}</p> : null}
+        {answer.imagePath ? (
+          <img src={answer.imagePath} alt={`${answer.questionTitle} 学生答案图片`} className="max-h-72 rounded-2xl border border-slate-200" />
+        ) : null}
+        {!answer.textAnswer && !answer.imagePath && answer.questionType !== QUESTION_TYPES.PROOF ? (
+          <p className="text-sm text-slate-500">未作答</p>
+        ) : null}
+      </div>
+    );
   }
 
   if (loading) {
@@ -918,11 +984,9 @@ export default function AssignmentPage() {
                     <div className="mt-4 space-y-3">
                       {submissionHistory.slice(1).map((submission) => (
                         <div key={submission.id} className="rounded-2xl bg-slate-50 px-4 py-3 text-sm text-slate-700">
-                          第 {submission.attemptNumber} 次 |
-                          {" "}
-                          {submission.gradingStatus === "PENDING" ? "评分中" : `${submission.overallScore}/${submission.maxScore} 分`}
-                          {" "}
-                          | {formatDateTime(submission.createdAt)}
+                          第 {submission.attemptNumber} 次 |{" "}
+                          {submission.gradingStatus === "PENDING" ? "评分中" : `${submission.overallScore}/${submission.maxScore} 分`} |{" "}
+                          {formatDateTime(submission.createdAt)}
                         </div>
                       ))}
                     </div>
@@ -962,7 +1026,9 @@ export default function AssignmentPage() {
                       </div>
                       <div className="text-right">
                         <p className="text-2xl font-semibold">
-                          {submission.gradingStatus === "PENDING" ? `-- / ${submission.maxScore}` : `${submission.overallScore}/${submission.maxScore}`}
+                          {submission.gradingStatus === "PENDING"
+                            ? `-- / ${submission.maxScore}`
+                            : `${submission.overallScore}/${submission.maxScore}`}
                         </p>
                         {submission.reviewedAt ? <p className="text-sm text-slate-500">复核时间：{formatDateTime(submission.reviewedAt)}</p> : null}
                       </div>

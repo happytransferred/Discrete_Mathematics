@@ -64,21 +64,86 @@ function normalizeText(value: string | null | undefined) {
   return (value || "").replace(/\s+/g, " ").trim().toLowerCase();
 }
 
+function displayText(value: string | null | undefined) {
+  return (value || "").trim();
+}
+
 function parseReferenceOptions(referenceAnswer: string | null | undefined) {
   return normalizeText(referenceAnswer)
-    .split(/[，,、\n]/)
+    .split(/[，、,\n]/)
     .map((item) => item.trim())
     .filter(Boolean);
 }
 
+function hasTextAnswer(answer: EnrichedAnswer | undefined) {
+  return Boolean(displayText(answer?.textAnswer));
+}
+
+function hasImageAnswer(answer: EnrichedAnswer | undefined) {
+  return Boolean(answer?.imagePath);
+}
+
+function hasProofSteps(answer: EnrichedAnswer | undefined) {
+  return Boolean((answer?.stepAnswers || []).some((item) => displayText(item)));
+}
+
+function inferSingleChoiceFromText(answer: EnrichedAnswer | undefined, question: AssignmentQuestionView) {
+  const direct = normalizeText(answer?.selectedOption);
+  if (direct) {
+    return direct;
+  }
+
+  const text = normalizeText(answer?.textAnswer);
+  if (!text) {
+    return "";
+  }
+
+  const letterMatch = text.match(/\b([a-z])\b/);
+  if (letterMatch) {
+    const index = letterMatch[1].charCodeAt(0) - 97;
+    if (index >= 0 && index < question.options.length) {
+      return normalizeText(question.options[index]);
+    }
+  }
+
+  const matched = question.options.find((option) => text.includes(normalizeText(option)));
+  return matched ? normalizeText(matched) : "";
+}
+
+function inferMultipleChoiceFromText(answer: EnrichedAnswer | undefined, question: AssignmentQuestionView) {
+  const direct = (answer?.selectedOptions || []).map(normalizeText).filter(Boolean);
+  if (direct.length > 0) {
+    return direct;
+  }
+
+  const text = normalizeText(answer?.textAnswer);
+  if (!text) {
+    return [];
+  }
+
+  const letters = Array.from(new Set((text.match(/[a-z]/g) || []).map((item) => item.toLowerCase())));
+  const mappedByLetters = letters
+    .map((char) => {
+      const index = char.charCodeAt(0) - 97;
+      return index >= 0 && index < question.options.length ? normalizeText(question.options[index]) : "";
+    })
+    .filter(Boolean);
+
+  const mappedByText = question.options
+    .filter((option) => text.includes(normalizeText(option)))
+    .map((option) => normalizeText(option));
+
+  return Array.from(new Set([...mappedByLetters, ...mappedByText]));
+}
+
 function scoreSingleChoice(answer: EnrichedAnswer | undefined, question: AssignmentQuestionView) {
-  const selected = normalizeText(answer?.selectedOption);
+  const selected = inferSingleChoiceFromText(answer, question);
   const reference = normalizeText(question.referenceAnswer);
 
   if (!selected) {
     return {
       score: 0,
-      comment: "未选择答案，请补充作答。"
+      comment: "未识别到明确的单选答案。"
     };
   }
 
@@ -96,20 +161,20 @@ function scoreSingleChoice(answer: EnrichedAnswer | undefined, question: Assignm
 }
 
 function scoreMultipleChoice(answer: EnrichedAnswer | undefined, question: AssignmentQuestionView) {
-  const selected = (answer?.selectedOptions || []).map(normalizeText).filter(Boolean);
+  const selected = inferMultipleChoiceFromText(answer, question);
   const reference = parseReferenceOptions(question.referenceAnswer);
 
   if (selected.length === 0) {
     return {
       score: 0,
-      comment: "未选择任何选项，请补充作答。"
+      comment: "未识别到有效的多选答案。"
     };
   }
 
   if (reference.length === 0) {
     return {
       score: Math.round(question.maxScore * 0.6),
-      comment: "该题缺少参考答案，已按保守规则给分，请教师复核。"
+      comment: "该题缺少参考答案，已按保守规则给分，建议教师复核。"
     };
   }
 
@@ -127,9 +192,8 @@ function scoreMultipleChoice(answer: EnrichedAnswer | undefined, question: Assig
   }
 
   const ratio = Math.max(0, (correctCount - wrongCount * 0.5) / referenceSet.size);
-  const score = Math.max(0, Math.round(question.maxScore * ratio));
   return {
-    score,
+    score: Math.max(0, Math.round(question.maxScore * ratio)),
     comment: "多选题部分命中参考答案，建议教师关注漏选或错选情况。"
   };
 }
@@ -155,7 +219,7 @@ function scoreFillBlank(answer: EnrichedAnswer | undefined, question: Assignment
   if (reference && (student.includes(reference) || reference.includes(student))) {
     return {
       score: Math.max(1, Math.round(question.maxScore * 0.6)),
-      comment: "答案与参考答案较接近，但表达不够完整。"
+      comment: "答案与参考答案较接近，但表述不够完整。"
     };
   }
 
@@ -194,7 +258,7 @@ function scoreImageFallback(imagePath: string | null | undefined, question: Assi
 
   return {
     score: Math.max(1, Math.round(question.maxScore * 0.7)),
-    comment: "已收到图片答案。当前为保守评分，建议教师结合原图复核。"
+    comment: "已收到图片答案，当前为保守评分，建议教师结合原图复核。"
   };
 }
 
@@ -226,20 +290,23 @@ function buildStudentAnswerSummary(answer: EnrichedAnswer | undefined, question:
     return "学生未提交该题答案。";
   }
 
+  const textAnswer = displayText(answer.textAnswer);
+  const imageNote = answer.imagePath ? `\n学生还上传了答案图片：${answer.imagePath}` : "";
+
   switch (question.type) {
     case QUESTION_TYPES.CHOICE:
-      return `学生选择：${answer.selectedOption || "未选择"}`;
+      return `学生选择：${answer.selectedOption || "未选择"}${textAnswer ? `\n学生确认的文字答案：${textAnswer}` : ""}${imageNote}`;
     case QUESTION_TYPES.MULTIPLE_CHOICE:
-      return `学生选择：${(answer.selectedOptions || []).join("、") || "未选择"}`;
+      return `学生选择：${(answer.selectedOptions || []).join("、") || "未选择"}${textAnswer ? `\n学生确认的文字答案：${textAnswer}` : ""}${imageNote}`;
     case QUESTION_TYPES.FILL_BLANK:
     case QUESTION_TYPES.TEXT:
-      return `学生文本答案：${answer.textAnswer || "未填写"}`;
+      return `学生文本答案：${textAnswer || "未填写"}${imageNote}`;
     case QUESTION_TYPES.PROOF:
-      return `学生分步答案：${(answer.stepAnswers || []).map((item, index) => `步骤${index + 1}：${item}`).join("\n") || "未填写"}`;
+      return `学生分步答案：${(answer.stepAnswers || []).map((item, index) => `步骤${index + 1}：${item}`).join("\n") || "未填写"}${textAnswer ? `\n学生确认的图片识别文本：${textAnswer}` : ""}${imageNote}`;
     case QUESTION_TYPES.IMAGE:
-      return answer.imagePath ? `学生上传了图片：${answer.imagePath}` : "学生未上传图片。";
+      return `${textAnswer ? `学生确认的文字答案：${textAnswer}\n` : ""}${answer.imagePath ? `学生上传了图片：${answer.imagePath}` : "学生未上传图片。"}`;
     default:
-      return answer.textAnswer || "学生已提交答案。";
+      return textAnswer || "学生已提交答案。";
   }
 }
 
@@ -264,8 +331,8 @@ function buildScoringPrompt(args: {
     !args.supportsVision && (args.question.promptImagePath || args.question.referenceImagePath || args.answer?.imagePath)
       ? "当前模型未启用图片理解，请仅基于可读文本和图片链接上下文给出保守评分，并提醒教师复核。"
       : null,
-    "请返回 JSON：{\"score\": number, \"comment\": string, \"suggestions\": [string]}",
-    `要求：score 必须在 0 到 ${args.question.maxScore} 之间；comment 使用中文，简明指出得分依据。`
+    '请返回 JSON：{"score": number, "comment": string, "suggestions": [string]}',
+    `要求：score 必须在 0 到 ${args.question.maxScore} 之间，comment 使用中文，简明指出得分依据。`
   ]
     .filter(Boolean)
     .join("\n");
@@ -497,11 +564,7 @@ async function callAiForQuestion(args: {
     return null;
   }
 
-  if (
-    !config.supportsVision &&
-    args.question.type === QUESTION_TYPES.IMAGE &&
-    (args.answer?.imagePath || args.question.promptImagePath || args.question.referenceImagePath)
-  ) {
+  if (!config.supportsVision && hasImageAnswer(args.answer)) {
     return null;
   }
 
@@ -530,6 +593,38 @@ async function gradeQuestion(
   question: AssignmentQuestionView,
   answer: EnrichedAnswer | undefined
 ) {
+  const shouldPreferAi = hasTextAnswer(answer) || hasImageAnswer(answer) || hasProofSteps(answer);
+
+  if (shouldPreferAi) {
+    try {
+      const aiResult = await callAiForQuestion({
+        assignmentTitle,
+        assignmentDescription,
+        question,
+        answer
+      });
+
+      if (aiResult) {
+        return {
+          check: {
+            questionId: question.id,
+            item: question.title || `第 ${question.orderIndex} 题`,
+            score: aiResult.score,
+            maxScore: question.maxScore,
+            comment: aiResult.comment,
+            rubric: question.gradingRubric || null,
+            source: "AI" as const
+          },
+          suggestions: aiResult.suggestions || [],
+          model: aiResult.model,
+          graderType: "AI" as const
+        };
+      }
+    } catch {
+      // 回退到规则评分
+    }
+  }
+
   if (question.type === QUESTION_TYPES.CHOICE) {
     const deterministic = scoreSingleChoice(answer, question);
     return {
@@ -584,37 +679,9 @@ async function gradeQuestion(
     };
   }
 
-  try {
-    const aiResult = await callAiForQuestion({
-      assignmentTitle,
-      assignmentDescription,
-      question,
-      answer
-    });
-
-    if (aiResult) {
-      return {
-        check: {
-          questionId: question.id,
-          item: question.title || `第 ${question.orderIndex} 题`,
-          score: aiResult.score,
-          maxScore: question.maxScore,
-          comment: aiResult.comment,
-          rubric: question.gradingRubric || null,
-          source: "AI" as const
-        },
-        suggestions: aiResult.suggestions || [],
-        model: aiResult.model,
-        graderType: "AI" as const
-      };
-    }
-  } catch {
-    // 回退到规则评分
-  }
-
   const answerText =
     question.type === QUESTION_TYPES.PROOF
-      ? (answer?.stepAnswers || []).filter(Boolean).join("\n")
+      ? (answer?.stepAnswers || []).filter((item) => displayText(item)).join("\n") || answer?.textAnswer || ""
       : answer?.textAnswer || "";
 
   const fallback =
